@@ -78,6 +78,23 @@ export function SettingsPage() {
     setSettings(DEFAULT_SETTINGS);
   };
 
+  // Reset only the STT/TTS engine choices to defaults (Web Speech for both),
+  // preserving the resume / API keys / owner token / notes / streaming /
+  // sampling. Useful when the engine picker is hidden and the previously
+  // saved engine (e.g. wstream) is stuck in localStorage.
+  const resetEngines = () => {
+    const next = {
+      ...settings,
+      stt_engine:    DEFAULT_SETTINGS.stt_engine,
+      tts_engine:    DEFAULT_SETTINGS.tts_engine,
+      tts_voice_uri: '',                              // voice ids are engine-specific
+    };
+    setSettings(next);
+    storage.saveSettings(next);
+    setSaved(`Reset to ${DEFAULT_SETTINGS.stt_engine} STT + ${DEFAULT_SETTINGS.tts_engine} TTS`);
+    setTimeout(() => setSaved(''), 3000);
+  };
+
   const clearAllKeys = () => {
     if (!confirm('Clear all locally-stored API keys?')) return;
     setSettings({ ...settings, api_keys: { ...DEFAULT_SETTINGS.api_keys } });
@@ -387,6 +404,7 @@ export function SettingsPage() {
       {/* ===== Save / Reset ========================================= */}
       <div className="row" style={{ marginTop: '1.5rem' }}>
         <button onClick={save}>Save</button>
+        <button className="secondary" onClick={resetEngines}>Reset engine choices</button>
         <button className="secondary" onClick={reset}>Reset all</button>
         {saved && <span className="status-pill ok">{saved}</span>}
       </div>
