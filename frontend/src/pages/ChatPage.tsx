@@ -7,10 +7,9 @@ import { storage } from '../lib/storage';
 import type {
   AppSettings,
   ChatMessage,
-  ImageData,
-  Mode,
   ServerConfig,
 } from '../lib/types';
+import { useChatStore } from '../state/ChatStore';
 import { useSpeechRecognizer } from '../stt/useSpeechRecognizer';
 import { useSpeaker } from '../tts/useSpeaker';
 
@@ -34,11 +33,13 @@ import { useSpeaker } from '../tts/useSpeaker';
 // practice sessions don't need persistence). Trivial to add localStorage if
 // you ever want it.
 export function ChatPage() {
-  const [mode, setMode]               = useState<Mode>('general');
-  const [history, setHistory]         = useState<ChatMessage[]>([]);
-  const [buffer, setBuffer]           = useState('');
+  // Cross-navigation state lives in the ChatStore context. Per-render
+  // transient state (sending flag, streaming text, errors, interim STT
+  // partial transcripts, in-flight abort controller) stays local.
+  const { mode, setMode, history, setHistory, buffer, setBuffer,
+          pendingImgs, setPendingImgs } = useChatStore();
+
   const [interim, setInterim]         = useState('');
-  const [pendingImgs, setImgs]        = useState<ImageData[]>([]);
   const [sending, setSending]         = useState(false);
   const [streamingText, setStreaming] = useState('');
   const [error, setError]             = useState<string>('');
@@ -95,7 +96,7 @@ export function ChatPage() {
     const userMsg: ChatMessage = { role: 'user', text, images: pendingImgs, at: Date.now() };
     const nextHistory = [...history, userMsg];
     setHistory(nextHistory);
-    setImgs([]);
+    setPendingImgs([]);
 
     const requestBody = {
       provider:    settings.provider,
@@ -116,7 +117,7 @@ export function ChatPage() {
       setError(reason);
       setHistory(history);
       setBuffer(text);
-      setImgs(pendingImgs);
+      setPendingImgs(pendingImgs);
     };
 
     if (settings.stream_replies) {
@@ -261,7 +262,7 @@ export function ChatPage() {
           value={displayedBuffer}
           onChange={(e) => { setBuffer(e.target.value); setInterim(''); }}
         />
-        <ImageDropZone pending={pendingImgs} setPending={setImgs} />
+        <ImageDropZone pending={pendingImgs} setPending={setPendingImgs} />
         <div className="input-row">
           <span className="hint">
             Press <kbd>s</kbd> to send (works while not typing).

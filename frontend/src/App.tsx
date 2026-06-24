@@ -2,6 +2,7 @@ import { Link, NavLink, Route, Routes } from 'react-router-dom';
 import { ChatPage } from './pages/ChatPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { FengShuiBadge } from './components/FengShuiBadge';
+import { ChatStoreProvider } from './state/ChatStore';
 
 // Inline SVG mark for the header. Same shape as /favicon.svg but with a
 // unique gradient id so multiple inlines on a page don't collide.
@@ -35,26 +36,28 @@ function HyniMark() {
 
 export function App() {
   return (
-    <div className="app">
-      <header className="app__header">
-        <Link to="/" className="app__brand">
-          <HyniMark />
-          <span>hyni</span>
-        </Link>
-        <nav className="app__nav">
-          <NavLink to="/"          end className={navClass}>Chat</NavLink>
-          <NavLink to="/settings"      className={navClass}>Settings</NavLink>
-        </nav>
-        <div className="app__spacer" />
-        <FengShuiBadge />
-      </header>
-      <main className="app__main">
-        <Routes>
-          <Route path="/"           element={<ChatPage />} />
-          <Route path="/settings"   element={<SettingsPage />} />
-        </Routes>
-      </main>
-    </div>
+    <ChatStoreProvider>
+      <div className="app">
+        <header className="app__header">
+          <Link to="/" className="app__brand">
+            <HyniMark />
+            <span>hyni</span>
+          </Link>
+          <nav className="app__nav">
+            <NavLink to="/"          end className={navClass}>Chat</NavLink>
+            <NavLink to="/settings"      className={navClass}>Settings</NavLink>
+          </nav>
+          <div className="app__spacer" />
+          <FengShuiBadge />
+        </header>
+        <main className="app__main">
+          <Routes>
+            <Route path="/"           element={<ChatPage />} />
+            <Route path="/settings"   element={<SettingsPage />} />
+          </Routes>
+        </main>
+      </div>
+    </ChatStoreProvider>
   );
 }
 
