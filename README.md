@@ -199,10 +199,7 @@ backend/src/
 | Persistence          | `localStorage` only — `hyni:profile`, `hyni:settings` (schema-versioned) |
 | State                | Chat history survives Chat ↔ Settings nav via a small `ChatStoreProvider` context (ephemeral on refresh — fresh interview each load) |
 | Styling              | Hand-written CSS (no framework) — small, fast, themable             |
-| STT                  | **Pluggable** `SpeechRecognizer` registry (`stt/registry.ts`) — adapters self-register at startup: |
-|                      | – Web Speech API ✅ default (Chrome/Edge/Safari, free, cloud) |
-|                      | – wstream (whisper.cpp WASM) ✅ available (private, slow on CPU) |
-|                      | – transformers.js (Whisper ONNX) 🛠 stub                              |
+| STT                  | **Pluggable** `SpeechRecognizer` registry (`stt/registry.ts`). Adapters self-register at startup: **Web Speech API** ✅ (default; Chrome/Edge/Safari, free, Google cloud), **wstream** ✅ (whisper.cpp WASM, private, slow on CPU), **transformers.js** 🛠 (Whisper ONNX, stub) |
 | TTS                  | **Pluggable** `Speaker` registry (`tts/registry.ts`) — Web Speech default; Piper / ElevenLabs stubs ready |
 | Multimodal           | Drag-and-drop **anywhere** on the chat page → base64 → forwarded with next send. Full-screen overlay while dragging. |
 | PDF resume           | `pdfjs-dist` extracts text fully client-side (resume PII never leaves the browser) |
@@ -244,10 +241,8 @@ frontend/src/
     ├── storage.ts          # typed localStorage wrapper (schema migrations)
     ├── pdf.ts              # client-side PDF text extraction (pdfjs-dist)
     ├── fengshui.ts         # shared cached client for fengshui.overhired.work
-    ├── files.ts, types.ts
-```
-    ├── files.ts        # File -> base64 helper
-    └── types.ts        # shared shapes (mirrors backend JSON)
+    ├── files.ts            # File -> base64 helper
+    └── types.ts            # shared shapes (mirrors backend JSON)
 ```
 
 ### Deployment — `cloudflared/`
