@@ -51,6 +51,7 @@ export function ChatPage() {
 
   const messagesRef = useRef<HTMLDivElement>(null);
   const abortRef    = useRef<AbortController | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // --- STT --------------------------------------------------------------
   const stt = useSpeechRecognizer(settings.stt_engine, {
@@ -136,6 +137,18 @@ export function ChatPage() {
     const el = messagesRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [history, sending, streamingText]);
+
+  // Auto-grow the composer textarea so multi-line transcripts / pasted
+  // questions don't make the user scroll inside a 70-px box. We shrink to
+  // a minimum first, then expand to fit content up to a sensible ceiling
+  // (~40% of the viewport — beyond that the textarea itself scrolls).
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const max = Math.round(window.innerHeight * 0.4);
+    el.style.height = Math.min(el.scrollHeight, max) + 'px';
+  }, [buffer, interim]);
 
   // --- Send -------------------------------------------------------------
   const send = useCallback(async () => {
@@ -346,14 +359,26 @@ export function ChatPage() {
 
       <div className="chat__input">
         <textarea
-          placeholder="Live transcript appears here. Edit if needed, then press 's' (outside this box) to send."
+          ref={textareaRef}
+          className="composer"
+          placeholder="Live transcript appears here, or type / paste / drag-drop an image. Press s (outside) or ⌘/Ctrl-Enter (inside) to send."
           value={displayedBuffer}
+          rows={3}
           onChange={(e) => { setBuffer(e.target.value); setInterim(''); }}
+          onKeyDown={(e) => {
+            // Cmd/Ctrl + Enter sends while focused inside the textarea. Plain
+            // Enter still inserts a newline so multi-line transcripts stay
+            // editable.
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              void send();
+            }
+          }}
         />
         <ImageDropZone pending={pendingImgs} setPending={setPendingImgs} />
         <div className="input-row">
           <span className="hint">
-            Press <kbd>s</kbd> to send (works while not typing).
+            <kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> or <kbd>s</kbd> to send. Drag-drop images anywhere on this page.
             {settings.stream_replies ? ' Replies stream in real time.' : ' Replies wait for completion.'}
             {!canCall && ' Configure an API key for ' + settings.provider + ' in Settings.'}
           </span>
@@ -364,7 +389,7 @@ export function ChatPage() {
             onClick={() => void send()}
             disabled={sending || (!buffer.trim() && pendingImgs.length === 0)}
           >
-            {sending ? 'Sending…' : 'Send (s)'}
+            {sending ? 'Sending…' : 'Send'}
           </button>
         </div>
       </div>

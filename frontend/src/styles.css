@@ -241,25 +241,26 @@ textarea { resize: vertical; font-family: var(--mono); }
 .status-pill.warn    { color: var(--warning); border-color: var(--warning); }
 .status-pill.err     { color: var(--error);   border-color: var(--error); }
 
-/* Chat layout */
+/* Chat layout — stretched to viewport edges so the chat__messages
+   scrollbar sits flush right (matching Settings' app__main scrollbar).
+   Bubbles still cap at a comfortable reading width so they don't run
+   the full width of a 4K monitor. */
 .chat {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto 1fr auto;
   height: 100%;
   width: 100%;
-  max-width: 1100px;
-  margin: 0 auto;
 }
 .chat__messages {
   overflow-y: auto;
-  padding: 1rem 1.25rem;
+  padding: 1rem 1.5rem;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
 }
 .chat__msg {
-  max-width: 85%;
+  max-width: min(85%, 820px);
   padding: 0.6rem 0.85rem;
   border-radius: 10px;
   white-space: pre-wrap;
@@ -431,14 +432,42 @@ textarea { resize: vertical; font-family: var(--mono); }
 .chat__input {
   border-top: 1px solid var(--border);
   background: var(--panel);
-  padding: 0.65rem 1rem;
+  padding: 0.85rem 1.5rem 1rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.6rem;
 }
-.chat__input textarea {
-  min-height: 70px;
+/* Big, auto-growing composer (Claude / ChatGPT style). Height is driven
+   by JS in ChatPage so it grows with content; the JS also enforces the
+   ~40vh ceiling. Inner padding + slightly larger type makes long answers
+   pleasant to edit. */
+.chat__input textarea.composer {
+  min-height: 110px;
+  max-height: 40vh;
+  width: 100%;
+  resize: vertical;            /* fallback if JS auto-grow is disabled */
+  padding: 0.75rem 0.9rem;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: inherit;
+  transition: border-color 120ms, box-shadow 120ms;
 }
+.chat__input textarea.composer:focus-visible {
+  outline: none;
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.18);
+}
+/* Sibling effect: when the page-wide drag overlay appears, also pulse
+   the composer border so the drop target is unambiguous. */
+body:has(.drop-overlay) .chat__input textarea.composer {
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.22);
+}
+
 .chat__input .input-row { display: flex; gap: 0.5rem; align-items: center; }
 .chat__input .input-row .hint { color: var(--muted); font-size: 0.8rem; flex: 1 1 auto; }
 
