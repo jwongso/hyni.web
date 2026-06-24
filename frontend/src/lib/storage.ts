@@ -11,6 +11,11 @@ import {
   type UserProfile,
 } from './types';
 
+// localStorage version stamp. Bump when changing a default that we want to
+// apply retroactively to already-saved settings. The migrator in
+// storage.loadSettings checks this and forces the new default through.
+const SETTINGS_SCHEMA_VERSION = 2;
+
 const PROFILE_KEY  = 'hyni:profile';
 const SETTINGS_KEY = 'hyni:settings';
 
@@ -44,6 +49,14 @@ export const storage = {
     // Defensive: ensure nested api_keys bag is well-formed even if an old
     // blob is missing it.
     s.api_keys = { ...DEFAULT_SETTINGS.api_keys, ...(s.api_keys ?? {}) };
+    // Schema migration: pre-v2 stored speak_replies=true by default. v2
+    // flips it off and forces the change on existing browsers exactly once.
+    const stamped = (s as unknown as { _schema?: number })._schema ?? 1;
+    if (stamped < SETTINGS_SCHEMA_VERSION) {
+      s.speak_replies = false;
+      (s as unknown as { _schema?: number })._schema = SETTINGS_SCHEMA_VERSION;
+      writeJSON(SETTINGS_KEY, s);
+    }
     return s;
   },
   saveSettings(s: AppSettings) {

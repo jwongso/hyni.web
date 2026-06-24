@@ -115,7 +115,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   tts_pitch: 1.0,
   temperature: 0.7,
   max_tokens: 4096,
-  speak_replies: true,
+  /**
+   * Off by default: TTS is noisy in shared spaces and the answer is
+   * already on screen. Users who want it can toggle in Settings.
+   */
+  speak_replies: false,
   stream_replies: true,
   api_keys: { ...EMPTY_API_KEYS },
   owner_token: '',
