@@ -44,6 +44,7 @@ export function ChatPage() {
   const [sending, setSending]               = useState(false);
   const [streamingText, setStreaming]       = useState('');
   const [streamingReasoning, setReasoning]  = useState('');
+  const [streamingToolCalls, setToolCalls]  = useState<import('../lib/types').ToolCallLog[]>([]);
   const [error, setError]                   = useState<string>('');
   const [settings, setSettings]             = useState<AppSettings>(() => storage.loadSettings());
   const [profile]                           = useState(() => storage.loadProfile());
@@ -162,6 +163,7 @@ export function ChatPage() {
     setInterim('');
     setStreaming('');
     setReasoning('');
+    setToolCalls([]);
 
     const userMsg: ChatMessage = { role: 'user', text, images: pendingImgs, at: Date.now() };
     const nextHistory = [...history, userMsg];
@@ -209,14 +211,23 @@ export function ChatPage() {
           assembledReasoning += chunk;
           setReasoning(assembledReasoning);
         },
+        onToolCall: (call) => {
+          // Live append for the in-flight bubble; the final list is
+          // overwritten from the `done` frame's authoritative tool_calls
+          // log when the stream ends.
+          setToolCalls((prev) => [...prev, call]);
+        },
         onDone: (final) => {
-          if (!final.success) {
+          if (!final.success && final.error !== '' && !(final.tool_calls && final.tool_calls.length > 0)) {
             rollback(final.error || `LLM error (HTTP ${final.http_status})`);
           } else {
+            const finalCalls = final.tool_calls && final.tool_calls.length
+              ? final.tool_calls : undefined;
             const asst: ChatMessage = {
               role: 'assistant', text: assembled, at: Date.now(),
               provider: settings.provider, model: settings.model,
               reasoning: assembledReasoning || undefined,
+              tool_calls: finalCalls,
             };
             setHistory([...nextHistory, asst]);
             if (settings.speak_replies) {
@@ -229,6 +240,7 @@ export function ChatPage() {
           }
           setStreaming('');
           setReasoning('');
+          setToolCalls([]);
           setSending(false);
           abortRef.current = null;
         },
@@ -236,6 +248,7 @@ export function ChatPage() {
           rollback(msg);
           setStreaming('');
           setReasoning('');
+          setToolCalls([]);
           setSending(false);
           abortRef.current = null;
         },
@@ -347,6 +360,7 @@ export function ChatPage() {
           messages={history}
           streamingText={streamingText}
           streamingReasoning={streamingReasoning}
+          streamingToolCalls={streamingToolCalls}
           pendingAssistant={sending}
           currentProvider={settings.provider}
           currentModel={settings.model}

@@ -393,6 +393,13 @@ void ChatController::postChatStream(const drogon::HttpRequestPtr& req,
     }
     const std::string api_key = key_pick.key;
 
+    // Attach the MCP tool catalogue when at least one server is alive,
+    // mirroring postChat. Without this, the streaming path would send
+    // NO tools and the model has no way to call them.
+    if (hyni::mcp::registry::any_alive() && cr.tools.empty()) {
+        cr.tools = hyni::mcp::registry::tools_openai_schema();
+    }
+
     // Async streaming response: Drogon sends Transfer-Encoding: chunked and
     // gives us a ResponseStreamPtr (unique_ptr). We need to forward it through
     // queueInLoop which takes std::function<void()> — and std::function
@@ -430,15 +437,42 @@ void ChatController::postChatStream(const drogon::HttpRequestPtr& req,
                         [&](std::string_view reasoning) {
                             return send_frame({{"reasoning", std::string(reasoning)}});
                         },
+                        // on_tool_call: fired after each MCP tool finishes.
+                        // Lets the SPA show a live "🛠 calling …" status pill
+                        // and replace it with the result inline. The full
+                        // tool_calls log is also re-sent in the done frame so
+                        // a late-connecting reader still gets it.
+                        [&](const hyni::tool_call_log& c) {
+                            return send_frame({{"tool_call", {
+                                {"id",         c.id},
+                                {"name",       c.name},
+                                {"arguments",  c.arguments},
+                                {"result",     c.result_text},
+                                {"is_error",   c.is_error},
+                                {"latency_ms", c.latency_ms},
+                            }}});
+                        },
                         // on_done: emit final frame with usage / status / error
                         // and gracefully close the chunked transfer.
                         [&](const hyni::chat_result& r) {
+                            json tcs = json::array();
+                            for (const auto& c : r.tool_calls) {
+                                tcs.push_back({
+                                    {"id",         c.id},
+                                    {"name",       c.name},
+                                    {"arguments",  c.arguments},
+                                    {"result",     c.result_text},
+                                    {"is_error",   c.is_error},
+                                    {"latency_ms", c.latency_ms},
+                                });
+                            }
                             send_frame({
                                 {"done",         true},
                                 {"success",      r.success},
                                 {"error",        r.error},
                                 {"latency_ms",   r.latency_ms},
                                 {"http_status",  r.http_status},
+                                {"tool_calls",   std::move(tcs)},
                                 {"usage", {
                                     {"prompt_tokens",     r.prompt_tokens},
                                     {"completion_tokens", r.completion_tokens}

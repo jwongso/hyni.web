@@ -10,6 +10,8 @@ interface Props {
   streamingText?: string;
   /** Optional reasoning-model chain-of-thought streaming alongside the answer. */
   streamingReasoning?: string;
+  /** Tool calls that completed during the in-flight stream. */
+  streamingToolCalls?: NonNullable<ChatMessage['tool_calls']>;
   /** If true (and streamingText is empty), show a "thinking…" placeholder. */
   pendingAssistant?: boolean;
   /** Provider/model currently selected — shown on in-flight assistant bubbles. */
@@ -113,10 +115,11 @@ function ReasoningBlock({ text }: { text: string }) {
 // timestamp (via fengshui.overhired.work) — green = lucky day,
 // gold = ordinary, red = unlucky. Silently absent if the API is offline.
 export function ChatMessages({
-  messages, streamingText, streamingReasoning,
+  messages, streamingText, streamingReasoning, streamingToolCalls,
   pendingAssistant, currentProvider, currentModel,
 }: Props) {
-  if (messages.length === 0 && !pendingAssistant && !streamingText && !streamingReasoning) {
+  if (messages.length === 0 && !pendingAssistant && !streamingText && !streamingReasoning &&
+      !(streamingToolCalls && streamingToolCalls.length > 0)) {
     return (
       <div className="chat__msg system">
         Tap <strong>Start listening</strong>, have your interviewer ask a
@@ -159,19 +162,23 @@ export function ChatMessages({
         );
       })}
       {(streamingText !== undefined && streamingText.length > 0) ||
-       (streamingReasoning !== undefined && streamingReasoning.length > 0) ? (
+       (streamingReasoning !== undefined && streamingReasoning.length > 0) ||
+       (streamingToolCalls && streamingToolCalls.length > 0) ? (
         <div className="chat__msg assistant">
           <div className="role">
             <span>{liveLabel}</span>
             <span style={{ opacity: 0.6 }}>· streaming…</span>
             {streamingText && <CopyButton text={streamingText} title="Copy (so far)" />}
           </div>
+          {streamingToolCalls && streamingToolCalls.length > 0
+            ? <ToolCallsBlock calls={streamingToolCalls} /> : null}
           {streamingReasoning ? <ReasoningBlock text={streamingReasoning} /> : null}
           {streamingText ? <Markdown text={streamingText} /> : null}
           {streamingText ? <span className="cursor-blink">▍</span> : null}
         </div>
       ) : null}
-      {pendingAssistant && !streamingText && !streamingReasoning && (
+      {pendingAssistant && !streamingText && !streamingReasoning &&
+       !(streamingToolCalls && streamingToolCalls.length > 0) && (
         <div className="chat__msg assistant">
           <div className="role">{liveLabel}</div>
           <em>thinking…</em>

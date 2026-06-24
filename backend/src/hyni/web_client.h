@@ -129,6 +129,14 @@ chat_result send_chat(const chat_request& req, const std::string& api_key);
 using stream_delta_cb     = std::function<bool(std::string_view text)>;
 using stream_reasoning_cb = std::function<bool(std::string_view text)>;
 using stream_done_cb      = std::function<void(const chat_result&)>;
+/**
+ * Fires once per executed MCP tool call inside send_chat_stream(), AFTER
+ * the call returns. Lets the controller emit a `{tool_call: {...}}` SSE
+ * frame so the frontend can render a live "🛠 calling …" pill that
+ * resolves to the result inline with the rest of the streaming reply.
+ * Return false to abort the stream.
+ */
+using stream_tool_call_cb = std::function<bool(const tool_call_log& call)>;
 
 void send_chat_stream(const chat_request& req,
                       const std::string& api_key,
@@ -142,6 +150,17 @@ void send_chat_stream(const chat_request& req,
                       const std::string& api_key,
                       const stream_delta_cb& on_delta,
                       const stream_reasoning_cb& on_reasoning,
+                      const stream_done_cb& on_done);
+
+// Full overload including the tool-call callback. Used by the
+// /api/chat/stream controller to forward live tool-call updates to the
+// SSE consumer. The 4- and 5-arg forms above are thin wrappers that
+// pass null callbacks here.
+void send_chat_stream(const chat_request& req,
+                      const std::string& api_key,
+                      const stream_delta_cb& on_delta,
+                      const stream_reasoning_cb& on_reasoning,
+                      const stream_tool_call_cb& on_tool_call,
                       const stream_done_cb& on_done);
 
 } // namespace hyni

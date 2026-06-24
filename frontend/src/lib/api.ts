@@ -50,12 +50,15 @@ export interface ChatStreamDone {
   latency_ms: number;
   http_status: number;
   usage: { prompt_tokens: number; completion_tokens: number };
+  tool_calls?: import('./types').ToolCallLog[];
 }
 
 export interface ChatStreamHandlers {
   onDelta(text: string): void;
   /** Reasoning-model chain-of-thought; rendered in a collapsible widget. */
   onReasoning?(text: string): void;
+  /** Live notification of an MCP tool call completing (streaming path only). */
+  onToolCall?(call: import('./types').ToolCallLog): void;
   onDone(final: ChatStreamDone): void;
   onError(message: string): void;
   /** Abort signal: cancels the underlying fetch, which aborts the LLM call. */
@@ -131,6 +134,8 @@ export async function postChatStream(
           h.onDelta(obj.delta);
         } else if (typeof obj.reasoning === 'string') {
           h.onReasoning?.(obj.reasoning);
+        } else if (obj.tool_call && typeof obj.tool_call === 'object') {
+          h.onToolCall?.(obj.tool_call);
         } else if (obj.error) {
           h.onError(String(obj.error));
         }

@@ -758,6 +758,19 @@ namespace {
 // Streaming-time context shared between the libcurl WRITEFUNCTION and the
 // caller's send_chat_stream invocation. Lives on the stack for the duration
 // of curl_easy_perform.
+// Accumulator for a streaming tool call. OpenAI streams the arguments
+// field as a sequence of partial JSON strings (one delta per few
+// characters), indexed by the call's slot in the assistant's tool_calls
+// array. We collect them per-index and assemble at end-of-stream.
+struct streaming_tool_call {
+    std::string id;
+    std::string name;
+    std::string arguments_partial;     // accumulating JSON string of arguments
+    // Anthropic only: the original content_block index this call lives
+    // at so we can echo back the right content shape when looping.
+    int         anthropic_index = -1;
+};
+
 struct stream_ctx {
     API_PROVIDER provider;
     const stream_delta_cb*     on_delta;
@@ -770,6 +783,16 @@ struct stream_ctx {
     int          completion_tokens = 0;
     bool         cancelled         = false;
     bool         done_seen         = false;   // OpenAI [DONE] / Anthropic message_stop
+    bool         finish_tool_calls = false;   // finish_reason / stop_reason marks a tool-use turn
+    // Per-round accumulator (cleared between rounds). Key = OpenAI's
+    // `delta.tool_calls[].index` (each call has its own index 0..N).
+    std::map<int, streaming_tool_call> streaming_tool_calls;
+    // Anthropic only: this turn's content_block array so we can echo it
+    // back verbatim as the prior assistant message when looping.
+    nlohmann::json anthropic_content = nlohmann::json::array();
+    std::string  anthropic_current_text;          // accumulates text within current block
+    int          anthropic_current_block_index = -1;
+    std::string  anthropic_current_block_type;   // "text" or "tool_use"
 };
 
 // Parse a single OpenAI/DeepSeek/Mistral SSE `data:` payload and apply its
@@ -782,132 +805,214 @@ bool apply_openai_frame(stream_ctx& ctx, std::string_view payload) {
         return true;
     }
 
-    simdjson::padded_string padded(payload);
-    simdjson::ondemand::parser parser;
-    simdjson::ondemand::document doc;
-    if (auto e = parser.iterate(padded).get(doc); e) return false;
+    // Per-frame nlohmann parse. Each SSE frame is a few hundred bytes;
+    // the simdjson speed advantage is irrelevant here and nlohmann is
+    // far simpler for the nested `tool_calls` path. Reasoning + content
+    // also flow through here without measurable overhead.
+    nlohmann::json doc;
+    try { doc = nlohmann::json::parse(payload); }
+    catch (...) { return false; }
 
-    // Surface error envelope mid-stream.
-    {
-        simdjson::ondemand::value err_val;
-        if (doc["error"].get(err_val) == simdjson::SUCCESS) {
-            std::string_view msg;
-            if (err_val["message"].get(msg) == simdjson::SUCCESS) ctx.error_text.assign(msg);
-            else ctx.error_text = "OpenAI returned an error envelope";
-            return false;
-        }
+    // Provider error envelope mid-stream.
+    if (doc.contains("error") && doc["error"].is_object()) {
+        ctx.error_text = doc["error"].value("message", "OpenAI returned an error envelope");
+        return false;
     }
 
     // Usage may appear in the final chunk (stream_options.include_usage).
-    {
-        simdjson::ondemand::value usage;
-        if (doc["usage"].get(usage) == simdjson::SUCCESS) {
-            int64_t v = 0;
-            if (usage["prompt_tokens"].get(v)     == simdjson::SUCCESS) ctx.prompt_tokens     = static_cast<int>(v);
-            if (usage["completion_tokens"].get(v) == simdjson::SUCCESS) ctx.completion_tokens = static_cast<int>(v);
-        }
+    if (doc.contains("usage") && doc["usage"].is_object()) {
+        const auto& u = doc["usage"];
+        ctx.prompt_tokens     = u.value("prompt_tokens",     ctx.prompt_tokens);
+        ctx.completion_tokens = u.value("completion_tokens", ctx.completion_tokens);
     }
 
-    simdjson::ondemand::array choices;
-    if (doc["choices"].get_array().get(choices) != simdjson::SUCCESS) return true;
-    for (auto choice : choices) {
-        simdjson::ondemand::value delta;
-        if (choice["delta"].get(delta) != simdjson::SUCCESS) continue;
-
-        // simdjson's ondemand `get<string_view>()` on a `null` value returns
-        // INCORRECT_TYPE *and* leaves the cursor in an indeterminate state.
-        // (llama.cpp's first chunk is {"role":"assistant","content":null}.)
-        // Extract each candidate as a raw value, skip if null/non-string.
-        auto extract = [](simdjson::ondemand::value& obj, const char* key,
-                          std::string_view& out) -> bool {
-            simdjson::ondemand::value v;
-            if (obj[key].get(v) != simdjson::SUCCESS) return false;
-            if (v.is_null()) return false;
-            std::string_view sv;
-            if (v.get_string().get(sv) != simdjson::SUCCESS) return false;
-            if (sv.empty()) return false;
-            out = sv;
-            return true;
-        };
-
-        // Visible answer — `content` is the canonical field across all
-        // OpenAI-compatible providers.
-        std::string_view content;
-        if (extract(delta, "content", content)) {
-            ctx.full_content.append(content);
-            if (ctx.on_delta && !(*ctx.on_delta)(content)) {
-                ctx.cancelled = true;
-                return false;
+    if (!doc.contains("choices") || !doc["choices"].is_array()) return true;
+    for (const auto& choice : doc["choices"]) {
+        // finish_reason marks end-of-turn intent on whichever chunk it
+        // arrives on (often the last). "tool_calls" tells us the LLM
+        // wants the caller to dispatch and loop.
+        if (choice.contains("finish_reason") && choice["finish_reason"].is_string()) {
+            if (choice["finish_reason"].get<std::string>() == "tool_calls") {
+                ctx.finish_tool_calls = true;
             }
         }
 
-        // Reasoning model's chain-of-thought — kept on its own channel so
-        // the frontend can render it in a collapsible "Thinking…" widget
-        // rather than mixing it into the visible answer. Both fields may
-        // appear (Qwen3 emits `reasoning_content`; some forks use
-        // `reasoning`); never both populated in the same chunk, so the
-        // `else if` saves one ondemand lookup.
-        std::string_view reasoning;
-        if (extract(delta, "reasoning_content", reasoning) ||
-            extract(delta, "reasoning",         reasoning)) {
-            ctx.full_reasoning.append(reasoning);
-            if (ctx.on_reasoning && *ctx.on_reasoning &&
-                !(*ctx.on_reasoning)(reasoning)) {
-                ctx.cancelled = true;
-                return false;
+        if (!choice.contains("delta") || !choice["delta"].is_object()) continue;
+        const auto& delta = choice["delta"];
+
+        // Visible answer.
+        if (delta.contains("content") && delta["content"].is_string()) {
+            const std::string& c = delta["content"].get_ref<const std::string&>();
+            if (!c.empty()) {
+                ctx.full_content.append(c);
+                if (ctx.on_delta && !(*ctx.on_delta)(c)) {
+                    ctx.cancelled = true;
+                    return false;
+                }
             }
         }
-        break;  // single choice only
+
+        // Reasoning model's chain-of-thought (Qwen3 / DeepSeek-R1 / GPT-5).
+        const char* rsn_keys[] = {"reasoning_content", "reasoning"};
+        for (const char* k : rsn_keys) {
+            if (delta.contains(k) && delta[k].is_string()) {
+                const std::string& r = delta[k].get_ref<const std::string&>();
+                if (!r.empty()) {
+                    ctx.full_reasoning.append(r);
+                    if (ctx.on_reasoning && *ctx.on_reasoning &&
+                        !(*ctx.on_reasoning)(r)) {
+                        ctx.cancelled = true;
+                        return false;
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Streaming tool calls. Each delta.tool_calls[] entry has an
+        // `index` slot; the same index reappears across many chunks as
+        // the model streams the arguments JSON string char-by-char.
+        // First chunk for an index carries id + function.name;
+        // subsequent chunks carry function.arguments fragments.
+        if (delta.contains("tool_calls") && delta["tool_calls"].is_array()) {
+            for (const auto& tc : delta["tool_calls"]) {
+                if (!tc.is_object()) continue;
+                const int idx = tc.value("index", 0);
+                auto& slot = ctx.streaming_tool_calls[idx];
+                if (tc.contains("id") && tc["id"].is_string() && slot.id.empty())
+                    slot.id = tc["id"].get<std::string>();
+                if (tc.contains("function") && tc["function"].is_object()) {
+                    const auto& fn = tc["function"];
+                    if (fn.contains("name") && fn["name"].is_string() && slot.name.empty())
+                        slot.name = fn["name"].get<std::string>();
+                    if (fn.contains("arguments") && fn["arguments"].is_string())
+                        slot.arguments_partial += fn["arguments"].get<std::string>();
+                }
+            }
+        }
+        break;  // first choice only
     }
     return true;
 }
 
 // Parse a single Anthropic SSE `data:` payload.
 bool apply_anthropic_frame(stream_ctx& ctx, std::string_view payload) {
-    simdjson::padded_string padded(payload);
-    simdjson::ondemand::parser parser;
-    simdjson::ondemand::document doc;
-    if (auto e = parser.iterate(padded).get(doc); e) return false;
+    nlohmann::json doc;
+    try { doc = nlohmann::json::parse(payload); }
+    catch (...) { return false; }
+    if (!doc.is_object() || !doc.contains("type") || !doc["type"].is_string()) return true;
+    const std::string type = doc["type"].get<std::string>();
 
-    std::string_view type_sv;
-    if (doc["type"].get(type_sv) != simdjson::SUCCESS) return true;
-
-    if (type_sv == "content_block_delta") {
-        simdjson::ondemand::value delta;
-        if (doc["delta"].get(delta) != simdjson::SUCCESS) return true;
-        std::string_view delta_type;
-        if (delta["type"].get(delta_type) != simdjson::SUCCESS) return true;
-        if (delta_type != "text_delta") return true;
-        std::string_view text;
-        if (delta["text"].get(text) != simdjson::SUCCESS || text.empty()) return true;
-        ctx.full_content.append(text);
-        if (ctx.on_delta && !(*ctx.on_delta)(text)) {
-            ctx.cancelled = true;
-            return false;
-        }
-    } else if (type_sv == "message_start") {
-        simdjson::ondemand::value msg;
-        if (doc["message"].get(msg) == simdjson::SUCCESS) {
-            simdjson::ondemand::value usage;
-            if (msg["usage"].get(usage) == simdjson::SUCCESS) {
-                int64_t v = 0;
-                if (usage["input_tokens"].get(v) == simdjson::SUCCESS) ctx.prompt_tokens = static_cast<int>(v);
+    if (type == "message_start") {
+        if (doc.contains("message") && doc["message"].is_object()) {
+            const auto& msg = doc["message"];
+            if (msg.contains("usage") && msg["usage"].is_object()) {
+                ctx.prompt_tokens = msg["usage"].value("input_tokens", ctx.prompt_tokens);
             }
         }
-    } else if (type_sv == "message_delta") {
-        simdjson::ondemand::value usage;
-        if (doc["usage"].get(usage) == simdjson::SUCCESS) {
-            int64_t v = 0;
-            if (usage["output_tokens"].get(v) == simdjson::SUCCESS) ctx.completion_tokens = static_cast<int>(v);
+        return true;
+    }
+
+    if (type == "content_block_start") {
+        const int idx = doc.value("index", -1);
+        if (!doc.contains("content_block") || !doc["content_block"].is_object()) return true;
+        const auto& cb = doc["content_block"];
+        const std::string cb_type = cb.value("type", "");
+        ctx.anthropic_current_block_index = idx;
+        ctx.anthropic_current_block_type  = cb_type;
+        ctx.anthropic_current_text.clear();
+        if (cb_type == "tool_use") {
+            streaming_tool_call slot;
+            slot.id   = cb.value("id",   "");
+            slot.name = cb.value("name", "");
+            slot.anthropic_index = idx;
+            // initial input may already be partially populated as {}.
+            if (cb.contains("input") && cb["input"].is_object() && !cb["input"].empty()) {
+                try { slot.arguments_partial = cb["input"].dump(); } catch (...) {}
+            }
+            ctx.streaming_tool_calls[idx] = std::move(slot);
         }
-    } else if (type_sv == "message_stop") {
+        return true;
+    }
+
+    if (type == "content_block_delta") {
+        if (!doc.contains("delta") || !doc["delta"].is_object()) return true;
+        const auto& d = doc["delta"];
+        const std::string dt = d.value("type", "");
+        if (dt == "text_delta") {
+            const std::string text = d.value("text", "");
+            if (!text.empty()) {
+                ctx.anthropic_current_text += text;
+                ctx.full_content.append(text);
+                if (ctx.on_delta && !(*ctx.on_delta)(text)) {
+                    ctx.cancelled = true;
+                    return false;
+                }
+            }
+        } else if (dt == "input_json_delta") {
+            const int idx = doc.value("index", ctx.anthropic_current_block_index);
+            const std::string frag = d.value("partial_json", "");
+            if (!frag.empty()) {
+                auto it = ctx.streaming_tool_calls.find(idx);
+                if (it != ctx.streaming_tool_calls.end()) {
+                    it->second.arguments_partial += frag;
+                }
+            }
+        }
+        return true;
+    }
+
+    if (type == "content_block_stop") {
+        // Push the completed block onto ctx.anthropic_content so the
+        // tool-loop replay has the verbatim assistant message.
+        const int idx = doc.value("index", ctx.anthropic_current_block_index);
+        if (ctx.anthropic_current_block_type == "text") {
+            ctx.anthropic_content.push_back({
+                {"type", "text"},
+                {"text", ctx.anthropic_current_text},
+            });
+        } else if (ctx.anthropic_current_block_type == "tool_use") {
+            auto it = ctx.streaming_tool_calls.find(idx);
+            if (it != ctx.streaming_tool_calls.end()) {
+                nlohmann::json input = nlohmann::json::object();
+                if (!it->second.arguments_partial.empty()) {
+                    try { input = nlohmann::json::parse(it->second.arguments_partial); }
+                    catch (...) { input = nlohmann::json::object(); }
+                }
+                ctx.anthropic_content.push_back({
+                    {"type",  "tool_use"},
+                    {"id",    it->second.id},
+                    {"name",  it->second.name},
+                    {"input", input},
+                });
+            }
+        }
+        ctx.anthropic_current_text.clear();
+        ctx.anthropic_current_block_type.clear();
+        return true;
+    }
+
+    if (type == "message_delta") {
+        if (doc.contains("usage") && doc["usage"].is_object()) {
+            ctx.completion_tokens = doc["usage"].value("output_tokens", ctx.completion_tokens);
+        }
+        if (doc.contains("delta") && doc["delta"].is_object()) {
+            const std::string sr = doc["delta"].value("stop_reason", "");
+            if (sr == "tool_use") ctx.finish_tool_calls = true;
+        }
+        return true;
+    }
+
+    if (type == "message_stop") {
         ctx.done_seen = true;
-    } else if (type_sv == "error") {
-        simdjson::ondemand::value err;
-        if (doc["error"].get(err) == simdjson::SUCCESS) {
-            std::string_view msg;
-            if (err["message"].get(msg) == simdjson::SUCCESS) ctx.error_text.assign(msg);
-            else ctx.error_text = "Anthropic stream returned error";
+        return true;
+    }
+
+    if (type == "error") {
+        if (doc.contains("error") && doc["error"].is_object()) {
+            ctx.error_text = doc["error"].value("message", "Anthropic stream returned error");
+        } else {
+            ctx.error_text = "Anthropic stream returned error";
         }
         return false;
     }
@@ -977,10 +1082,13 @@ void enable_streaming(nlohmann::json& payload, API_PROVIDER p) {
 
 } // namespace
 
+// Full overload: streams with optional reasoning + tool-call callbacks
+// and runs the MCP tool-call loop in-line. Other overloads delegate here.
 void send_chat_stream(const chat_request& req,
                       const std::string& api_key,
                       const stream_delta_cb& on_delta,
                       const stream_reasoning_cb& on_reasoning,
+                      const stream_tool_call_cb& on_tool_call,
                       const stream_done_cb& on_done) {
     chat_result r;
     if (api_key.empty() && req.provider != API_PROVIDER::Local) {
@@ -1002,83 +1110,224 @@ void send_chat_stream(const chat_request& req,
         enable_streaming(payload, req.provider);
     } catch (const std::exception& e) { r.error = e.what(); on_done(r); return; }
 
-    const std::string payload_str = payload.dump();
-
-    CURL* curl = curl_easy_init();
-    if (!curl) { r.error = "curl_easy_init failed"; on_done(r); return; }
-
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    headers = curl_slist_append(headers, "Accept: text/event-stream");
-    if (req.provider == API_PROVIDER::Anthropic) {
-        headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
-        const std::string h = "x-api-key: " + api_key;
-        headers = curl_slist_append(headers, h.c_str());
-    } else if (!api_key.empty()) {
-        const std::string h = "Authorization: Bearer " + api_key;
-        headers = curl_slist_append(headers, h.c_str());
+    // Inject tools — same shapes as send_chat() (Anthropic shape lives
+    // in build_payload; OpenAI-compat shape goes here).
+    if (!req.tools.empty() && req.provider != API_PROVIDER::Anthropic) {
+        payload["tools"]       = req.tools;
+        payload["tool_choice"] = "auto";
     }
 
-    stream_ctx ctx;
-    ctx.provider     = req.provider;
-    ctx.on_delta     = &on_delta;
-    ctx.on_reasoning = &on_reasoning;
+    long long total_latency_ms = 0;
+    long      http_code        = 0;
+    CURLcode  last_rc          = CURLE_OK;
+    bool      cancelled        = false;
+    std::string error_text;
+    std::string assembled_reasoning;
 
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload_str.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(payload_str.size()));
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stream_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(req.timeout_seconds));
-    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2_0);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
-    curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 16384L);
+    const int max_rounds = std::max(1, req.max_tool_rounds + 1);
+    for (int round = 0; round < max_rounds; ++round) {
+        stream_ctx ctx;
+        ctx.provider     = req.provider;
+        ctx.on_delta     = &on_delta;
+        ctx.on_reasoning = &on_reasoning;
 
-    const auto t0 = std::chrono::steady_clock::now();
-    CURLcode rc   = curl_easy_perform(curl);
-    const auto t1 = std::chrono::steady_clock::now();
-    r.latency_ms  = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+        CURL* curl = curl_easy_init();
+        if (!curl) { error_text = "curl_easy_init failed"; break; }
 
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        headers = curl_slist_append(headers, "Accept: text/event-stream");
+        if (req.provider == API_PROVIDER::Anthropic) {
+            headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
+            const std::string h = "x-api-key: " + api_key;
+            headers = curl_slist_append(headers, h.c_str());
+        } else if (!api_key.empty()) {
+            const std::string h = "Authorization: Bearer " + api_key;
+            headers = curl_slist_append(headers, h.c_str());
+        }
 
-    r.http_status       = static_cast<int>(http_code);
-    r.content           = std::move(ctx.full_content);
-    r.prompt_tokens     = ctx.prompt_tokens;
-    r.completion_tokens = ctx.completion_tokens;
+        const std::string payload_str = payload.dump();
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload_str.c_str());
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(payload_str.size()));
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stream_write_cb);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(req.timeout_seconds));
+        curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2_0);
+        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+        curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 16384L);
 
-    if (ctx.cancelled) {
+        const auto t0 = std::chrono::steady_clock::now();
+        last_rc       = curl_easy_perform(curl);
+        const auto t1 = std::chrono::steady_clock::now();
+        total_latency_ms += std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+
+        // Carry per-round content into the accumulating result.
+        r.content += std::move(ctx.full_content);
+        assembled_reasoning += std::move(ctx.full_reasoning);
+        r.prompt_tokens     = std::max(r.prompt_tokens,     ctx.prompt_tokens);
+        r.completion_tokens = std::max(r.completion_tokens, ctx.completion_tokens);
+
+        if (ctx.cancelled) { cancelled = true; break; }
+        if (!ctx.error_text.empty()) { error_text = std::move(ctx.error_text); break; }
+        if (last_rc != CURLE_OK)     { error_text = std::string("HTTP transport error: ") + curl_easy_strerror(last_rc); break; }
+
+        // No tool calls this round: model produced its final answer.
+        if (ctx.streaming_tool_calls.empty()) break;
+        // Out of budget — surface what we have. Caller sees content +
+        // tool_calls log; final error explains the cap was hit.
+        if (round + 1 == max_rounds) {
+            error_text = "tool-call budget exhausted ("
+                       + std::to_string(req.max_tool_rounds) + " rounds)";
+            break;
+        }
+
+        // --- Tool-call round: dispatch + append messages + loop ---
+        if (req.provider == API_PROVIDER::Anthropic) {
+            payload["messages"].push_back({
+                {"role",    "assistant"},
+                {"content", ctx.anthropic_content.is_array() && !ctx.anthropic_content.empty()
+                                ? ctx.anthropic_content
+                                : nlohmann::json::array()},
+            });
+            nlohmann::json tool_results = nlohmann::json::array();
+            for (auto& [idx, slot] : ctx.streaming_tool_calls) {
+                nlohmann::json args = nlohmann::json::object();
+                if (!slot.arguments_partial.empty()) {
+                    try { args = nlohmann::json::parse(slot.arguments_partial); }
+                    catch (...) { args = nlohmann::json::object(); }
+                }
+                tool_call_log call;
+                call.id   = slot.id;
+                call.name = slot.name;
+                call.arguments = args;
+                const auto t_call0 = std::chrono::steady_clock::now();
+                const auto mcp_res = hyni::mcp::registry::call(call.name, args);
+                const auto t_call1 = std::chrono::steady_clock::now();
+                call.latency_ms  = std::chrono::duration_cast<std::chrono::milliseconds>(t_call1 - t_call0).count();
+                call.result_text = mcp_res.content_text;
+                call.is_error    = mcp_res.is_error;
+                nlohmann::json tr = {
+                    {"type",        "tool_result"},
+                    {"tool_use_id", call.id},
+                    {"content",     call.result_text.empty()
+                                       ? (call.is_error ? mcp_res.error_message : "[no output]")
+                                       : call.result_text},
+                };
+                if (call.is_error) tr["is_error"] = true;
+                tool_results.push_back(std::move(tr));
+                if (on_tool_call) {
+                    if (!on_tool_call(call)) { cancelled = true; break; }
+                }
+                r.tool_calls.push_back(std::move(call));
+            }
+            payload["messages"].push_back({
+                {"role",    "user"},
+                {"content", std::move(tool_results)},
+            });
+        } else {
+            // OpenAI-compat: assistant message with tool_calls, then one
+            // role:tool message per call.
+            nlohmann::json asst_msg = {
+                {"role", "assistant"},
+                {"content", r.content.empty() ? "" : r.content},
+                {"tool_calls", nlohmann::json::array()},
+            };
+            for (const auto& [idx, slot] : ctx.streaming_tool_calls) {
+                asst_msg["tool_calls"].push_back({
+                    {"id",       slot.id},
+                    {"type",     "function"},
+                    {"function", {
+                        {"name",      slot.name},
+                        {"arguments", slot.arguments_partial.empty() ? "{}" : slot.arguments_partial},
+                    }},
+                });
+            }
+            payload["messages"].push_back(std::move(asst_msg));
+
+            for (auto& [idx, slot] : ctx.streaming_tool_calls) {
+                nlohmann::json args = nlohmann::json::object();
+                if (!slot.arguments_partial.empty()) {
+                    try { args = nlohmann::json::parse(slot.arguments_partial); }
+                    catch (...) { args = nlohmann::json::object(); }
+                }
+                tool_call_log call;
+                call.id   = slot.id;
+                call.name = slot.name;
+                call.arguments = args;
+                const auto t_call0 = std::chrono::steady_clock::now();
+                const auto mcp_res = hyni::mcp::registry::call(call.name, args);
+                const auto t_call1 = std::chrono::steady_clock::now();
+                call.latency_ms  = std::chrono::duration_cast<std::chrono::milliseconds>(t_call1 - t_call0).count();
+                call.result_text = mcp_res.content_text;
+                call.is_error    = mcp_res.is_error;
+                payload["messages"].push_back({
+                    {"role",         "tool"},
+                    {"tool_call_id", call.id},
+                    {"content",      call.result_text.empty()
+                                       ? (call.is_error ? mcp_res.error_message : "[no output]")
+                                       : call.result_text},
+                });
+                if (on_tool_call) {
+                    if (!on_tool_call(call)) { cancelled = true; break; }
+                }
+                r.tool_calls.push_back(std::move(call));
+            }
+        }
+        if (cancelled) break;
+        // Reset per-round content so the next loop starts with a clean
+        // "this turn" view (visible deltas keep flowing live, but the
+        // backend's running text accumulator restarts for the next
+        // assistant message; the previous text was already saved into
+        // payload.messages as the assistant turn).
+        r.content.clear();
+    }
+
+    r.latency_ms  = total_latency_ms;
+    r.http_status = static_cast<int>(http_code);
+    if (cancelled) {
         r.success = false;
         r.error   = "cancelled by client";
-    } else if (!ctx.error_text.empty()) {
-        r.success = false;
-        r.error   = std::move(ctx.error_text);
-    } else if (rc != CURLE_OK) {
-        r.success = false;
-        r.error   = std::string("HTTP transport error: ") + curl_easy_strerror(rc);
+    } else if (!error_text.empty()) {
+        // Budget-exhausted is still a "success" — we have content + log.
+        if (error_text.rfind("tool-call budget", 0) == 0) {
+            r.success = true;
+            r.error   = std::move(error_text);
+        } else {
+            r.success = false;
+            r.error   = std::move(error_text);
+        }
     } else if (!r.content.empty()) {
         r.success = true;
-    } else if (!ctx.full_reasoning.empty()) {
-        // Reasoning-only output: the model burned every token on its
-        // chain-of-thought and never reached a visible answer. Surface the
-        // reasoning so the user has SOMETHING to read, and tell them how
-        // to fix it.
+    } else if (!assembled_reasoning.empty()) {
         r.success = true;
         r.content = "[The model spent all available tokens reasoning and "
                     "didn't reach a final answer. Try a larger max_tokens "
                     "(e.g. 8192+) for reasoning models.]\n\n— Internal "
-                    "reasoning that was produced:\n" + ctx.full_reasoning;
+                    "reasoning that was produced:\n" + assembled_reasoning;
     } else {
         r.success = false;
         r.error   = "stream finished with empty content";
     }
 
     on_done(r);
+}
+
+// 5-arg overload: no tool-call callback (tool calls still run; UI just
+// doesn't get the live ping).
+void send_chat_stream(const chat_request& req,
+                      const std::string& api_key,
+                      const stream_delta_cb& on_delta,
+                      const stream_reasoning_cb& on_reasoning,
+                      const stream_done_cb& on_done) {
+    static const stream_tool_call_cb null_tc;
+    send_chat_stream(req, api_key, on_delta, on_reasoning, null_tc, on_done);
 }
 
 // 4-arg overload: no reasoning channel — reasoning chunks are dropped.
