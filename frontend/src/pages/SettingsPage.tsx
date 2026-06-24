@@ -227,6 +227,12 @@ export function SettingsPage() {
             onChange={(e) => settingsChange('provider', e.target.value as ProviderId)}
           >
             {config?.providers.map((p) => {
+              // Local provider is auth-less — its endpoint URL lives in its
+              // own Settings section, so the cloud-key annotations don't
+              // apply. Render plain 'local'.
+              if (p.id === 'local') {
+                return <option key={p.id} value={p.id}>local</option>;
+              }
               const own = !!settings.api_keys[p.id];
               const flag = p.has_key ? '· server key' : own ? '· your key' : '· no key';
               return <option key={p.id} value={p.id}>{p.id} {flag}</option>;
