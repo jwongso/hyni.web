@@ -1,7 +1,7 @@
 // Shared types mirroring backend JSON shapes.
 
-export type Mode = 'general' | 'coding' | 'behavioral';
-export const MODES: Mode[] = ['general', 'coding', 'behavioral'];
+export type Mode = 'general' | 'coding' | 'behavioral' | 'system_design';
+export const MODES: Mode[] = ['general', 'coding', 'behavioral', 'system_design'];
 
 export type ProviderId = 'openai' | 'anthropic' | 'deepseek' | 'mistral';
 export const PROVIDER_IDS: ProviderId[] = ['openai', 'anthropic', 'deepseek', 'mistral'];

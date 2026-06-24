@@ -7,9 +7,10 @@ interface Props {
 }
 
 const LABELS: Record<Mode, string> = {
-  general:    'General',
-  coding:     'Coding',
-  behavioral: 'Behavioral (STAR)',
+  general:       'General',
+  coding:        'Coding',
+  behavioral:    'Behavioral (STAR)',
+  system_design: 'System Design',
 };
 
 export function ModeToggle({ value, onChange, disabled }: Props) {

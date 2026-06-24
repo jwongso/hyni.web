@@ -26,7 +26,8 @@ enum class API_PROVIDER {
 enum class QUESTION_TYPE {
     General,
     Coding,
-    Behavioral
+    Behavioral,
+    SystemDesign
 };
 
 inline std::string provider_to_str(API_PROVIDER p) {
@@ -49,16 +50,18 @@ inline API_PROVIDER provider_from_str(const std::string& s) {
 
 inline std::string mode_to_str(QUESTION_TYPE t) {
     switch (t) {
-    case QUESTION_TYPE::General:    return "general";
-    case QUESTION_TYPE::Coding:     return "coding";
-    case QUESTION_TYPE::Behavioral: return "behavioral";
+    case QUESTION_TYPE::General:      return "general";
+    case QUESTION_TYPE::Coding:       return "coding";
+    case QUESTION_TYPE::Behavioral:   return "behavioral";
+    case QUESTION_TYPE::SystemDesign: return "system_design";
     }
     return "general";
 }
 
 inline QUESTION_TYPE mode_from_str(const std::string& s) {
-    if (s == "coding")     return QUESTION_TYPE::Coding;
-    if (s == "behavioral") return QUESTION_TYPE::Behavioral;
+    if (s == "coding")        return QUESTION_TYPE::Coding;
+    if (s == "behavioral")    return QUESTION_TYPE::Behavioral;
+    if (s == "system_design") return QUESTION_TYPE::SystemDesign;
     return QUESTION_TYPE::General;
 }
 
