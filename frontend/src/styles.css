@@ -175,25 +175,18 @@ textarea { resize: vertical; font-family: var(--mono); }
   flex-direction: column;
 }
 
-/* Generic page card layout. Fills the app__main width so the scrollbar
-   sits at the viewport edge — matching the Chat view. A SINGLE
-   max-width applied to every direct child gives the page one
-   consistent column rather than the chaos of pills going full-width
-   while fields cap at 820. Headings opt out so they can span the full
-   width if desired. */
+/* Generic page card layout. Same skeleton as Chat: fills the
+   app__main width edge-to-edge, scrollbar sits at the viewport edge.
+   Form fields and pills stretch full-width — matches the Chat
+   composer's full-width textarea. */
 .page {
   padding: 1rem 1.5rem 2rem;
   width: 100%;
 }
-.page > * { max-width: 1000px; }
-.page > h1,
-.page > h2 { max-width: none; margin-left: 0; }
 .page h1 { margin: 0.25rem 0 0.75rem; font-size: 1.4rem; color: var(--accent-2); }
 .page h2 { margin: 1.25rem 0 0.5rem; font-size: 1.05rem; }
 
-.field {
-  margin-bottom: 0.9rem;
-}
+.field { margin-bottom: 0.9rem; }
 .field label {
   display: block;
   font-size: 0.85rem;
