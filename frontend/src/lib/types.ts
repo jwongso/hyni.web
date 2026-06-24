@@ -38,6 +38,8 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
   images?: ImageData[];
+  /** Epoch-ms creation time. Used by the per-message auspice dot. */
+  at?: number;
 }
 
 export interface UserProfile {

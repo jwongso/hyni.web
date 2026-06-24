@@ -92,7 +92,7 @@ export function ChatPage() {
     setInterim('');
     setStreaming('');
 
-    const userMsg: ChatMessage = { role: 'user', text, images: pendingImgs };
+    const userMsg: ChatMessage = { role: 'user', text, images: pendingImgs, at: Date.now() };
     const nextHistory = [...history, userMsg];
     setHistory(nextHistory);
     setImgs([]);
@@ -134,7 +134,7 @@ export function ChatPage() {
           if (!final.success) {
             rollback(final.error || `LLM error (HTTP ${final.http_status})`);
           } else {
-            const asst: ChatMessage = { role: 'assistant', text: assembled };
+            const asst: ChatMessage = { role: 'assistant', text: assembled, at: Date.now() };
             setHistory([...nextHistory, asst]);
             if (settings.speak_replies) {
               void tts.speak(assembled, {
@@ -164,7 +164,7 @@ export function ChatPage() {
       if (!reply.success) {
         rollback(reply.error || `LLM error (HTTP ${reply.http_status})`);
       } else {
-        const asst: ChatMessage = { role: 'assistant', text: reply.content };
+        const asst: ChatMessage = { role: 'assistant', text: reply.content, at: Date.now() };
         setHistory([...nextHistory, asst]);
         if (settings.speak_replies) {
           void tts.speak(reply.content, {

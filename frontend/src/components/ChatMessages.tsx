@@ -1,4 +1,5 @@
 import type { ChatMessage } from '../lib/types';
+import { DayDot } from './DayDot';
 
 interface Props {
   messages: ChatMessage[];
@@ -10,6 +11,9 @@ interface Props {
 
 // Renders a conversation as bubbles. Pre-wraps long content; image
 // attachments render as small previews under the user message.
+// Each bubble carries a tiny coloured auspice dot derived from its
+// timestamp (via fengshui.overhired.work) — green = lucky day,
+// gold = ordinary, red = unlucky. Silently absent if the API is offline.
 export function ChatMessages({ messages, streamingText, pendingAssistant }: Props) {
   if (messages.length === 0 && !pendingAssistant && !streamingText) {
     return (
@@ -24,7 +28,10 @@ export function ChatMessages({ messages, streamingText, pendingAssistant }: Prop
     <>
       {messages.map((m, i) => (
         <div key={i} className={`chat__msg ${m.role}`}>
-          <div className="role">{m.role}</div>
+          <div className="role">
+            <span>{m.role}</span>
+            {m.at != null && <DayDot at={m.at} />}
+          </div>
           {m.text}
           {m.images && m.images.length > 0 && (
             <div className="images">
@@ -41,7 +48,10 @@ export function ChatMessages({ messages, streamingText, pendingAssistant }: Prop
       ))}
       {streamingText !== undefined && streamingText.length > 0 && (
         <div className="chat__msg assistant">
-          <div className="role">assistant <span style={{ opacity: 0.6 }}>· streaming…</span></div>
+          <div className="role">
+            <span>assistant</span>
+            <span style={{ opacity: 0.6 }}>· streaming…</span>
+          </div>
           {streamingText}
           <span className="cursor-blink">▍</span>
         </div>
