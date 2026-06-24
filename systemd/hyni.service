@@ -1,0 +1,74 @@
+[Unit]
+# hyni.web — Drogon C++ backend serving the SPA at :8848.
+# Designed to run as a per-user service (systemd --user), so you never
+# need root to start/stop it and it can't tread on system services.
+#
+# Install (one-time):
+#   mkdir -p ~/.config/systemd/user
+#   ln -sf  "$(pwd)/systemd/hyni.service"  ~/.config/systemd/user/hyni.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now hyni.service
+#
+# Optional — run at boot even when no session is open (recommended for
+# the Cloudflare-Tunnel public deployment):
+#   sudo loginctl enable-linger "$USER"
+#
+# Inspect:
+#   systemctl --user status hyni.service
+#   journalctl --user -u hyni -f
+#   systemctl --user restart hyni.service
+Description=hyni.web — interview-practice backend (Drogon C++)
+Documentation=https://github.com/jwongso/hyni.web
+After=network-online.target
+Wants=network-online.target
+
+# Crash-loop guard: give up if we restart 5 times inside 30s
+# (likely a config bug — inspect with `journalctl --user -u hyni`).
+StartLimitIntervalSec=30
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# %h expands to the user's $HOME at runtime; override via
+# `systemctl --user edit hyni` if the repo lives elsewhere.
+Environment=HYNI_ROOT=%h/proj/priv/hyni.web
+WorkingDirectory=%h/proj/priv/hyni.web
+
+# Load all API keys + HYNI_OWNER_TOKEN + LOCAL_LLM_URL from the repo's
+# .env. EnvironmentFile silently skips a missing file (the leading '-'),
+# but if .env exists every KEY=VALUE line becomes an env var for the
+# server.
+EnvironmentFile=-%h/proj/priv/hyni.web/.env
+
+ExecStart=%h/proj/priv/hyni.web/backend/build/hyni_web_server
+
+# Crash recovery: restart with a short backoff. Burst limits live in
+# [Unit] (not [Service]) per systemd manpage convention.
+Restart=on-failure
+RestartSec=2
+
+# Reasonable resource caps — Drogon is single-process, libcurl + a few
+# IO loop threads.
+LimitNOFILE=8192
+
+# Hardening — none of these break Drogon's accept loop or libcurl; they
+# just shrink the blast radius if someone breaks in via a provider RCE.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/proj/priv/hyni.web/public/app %h/proj/priv/hyni.web/backend/build /tmp
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# Journal-only logging; pick this up with `journalctl --user -u hyni`.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hyni
+
+[Install]
+WantedBy=default.target

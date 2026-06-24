@@ -394,6 +394,36 @@ Edit to change listening port, log level, max body size, etc. The default
 binds `0.0.0.0:8848` and serves `./public` with the cross-origin isolation
 headers required by SharedArrayBuffer / WASM threads.
 
+### Running as a systemd user service
+
+For long-running deployments (e.g. behind the Cloudflare Tunnel), run
+the backend as a per-user systemd unit — no root needed, auto-restart
+on crash, logs to the journal. The repo ships a ready-to-use unit at
+[`systemd/hyni.service`](systemd/hyni.service):
+
+```bash
+mkdir -p ~/.config/systemd/user
+ln -sf "$(pwd)/systemd/hyni.service" ~/.config/systemd/user/hyni.service
+systemctl --user daemon-reload
+systemctl --user enable --now hyni.service
+
+# inspect
+systemctl --user status hyni.service
+journalctl --user -u hyni -f
+```
+
+By default, user units only run while you have an active session
+(login on tty or SSH). To keep hyni up at boot and across logouts:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+The unit reads `.env` from the repo root via `EnvironmentFile=`, so any
+edit + `systemctl --user restart hyni` reloads keys. Override the repo
+path (default `~/proj/priv/hyni.web`) with `systemctl --user edit hyni`
+if you cloned elsewhere.
+
 ### Frontend (`localStorage`)
 
 - `hyni:profile` — `{resume_text, target_role, extra_notes}` (target_role doubles as the full job description; extra_notes is a free-text catch-all that can include per-mode conditional instructions)
