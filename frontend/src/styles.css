@@ -176,18 +176,25 @@ textarea { resize: vertical; font-family: var(--mono); }
 }
 
 /* Generic page card layout. Scrolling is handled by the parent
-   .app__main so the scrollbar sits at the viewport edge instead of
-   floating next to this centered, max-width content column. */
+   .app__main so the scrollbar sits at the viewport edge — matching the
+   Chat view, which also fills the viewport. Individual form fields
+   below cap themselves at a comfortable reading width so they don't
+   stretch ridiculously on 4K monitors. */
 .page {
   padding: 1rem 1.5rem 2rem;
-  max-width: 1100px;
-  margin: 0 auto;
   width: 100%;
 }
 .page h1 { margin: 0.25rem 0 0.75rem; font-size: 1.4rem; color: var(--accent-2); }
 .page h2 { margin: 1.25rem 0 0.5rem; font-size: 1.05rem; }
 
-.field { margin-bottom: 0.9rem; }
+/* Form-row constraints: keep individual fields at the same max-width as
+   chat bubbles (min(85%, 820px)) so the two pages feel visually
+   aligned when you flip between them. Headings stay flush-left
+   full-width; only the input + help text column is constrained. */
+.field {
+  margin-bottom: 0.9rem;
+  max-width: 820px;
+}
 .field label {
   display: block;
   font-size: 0.85rem;
@@ -196,7 +203,13 @@ textarea { resize: vertical; font-family: var(--mono); }
 }
 .field small { color: var(--muted); }
 
-.row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+.row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  max-width: 820px;
+}
 
 .toolbar {
   display: flex;
