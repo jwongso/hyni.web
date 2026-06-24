@@ -16,8 +16,8 @@
     "enable_session": false,
     "document_root": "./public",
     "upload_path": "uploads",
-    "client_max_body_size": "20M",
-    "client_max_memory_body_size": "8M",
+    "client_max_body_size": "50M",
+    "client_max_memory_body_size": "32M",
     "max_connections": 1000,
     "max_connections_per_ip": 50,
     "log": {
