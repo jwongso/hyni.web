@@ -19,5 +19,8 @@ include(GoogleTest)
 gtest_discover_tests(hyni_web_tests
     PROPERTIES
         # Default ctest timeout per case (live-LLM calls can be slow).
-        TIMEOUT 60
+        TIMEOUT 120
+        # Real-screenshot fixtures live next to this file; expose the path
+        # so the binary can find them regardless of CWD when launched.
+        ENVIRONMENT "HYNI_TEST_FIXTURES_DIR=${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
 )

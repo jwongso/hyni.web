@@ -22,6 +22,9 @@
 // A full pass against OpenAI + Anthropic is well under $0.05.
 
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -87,6 +90,42 @@ bool server_owner_mode_enabled() {
 // Single-image / three-image payload builders shared by several tests.
 json image_obj(const char* base64, const char* mime = "image/png") {
     return { {"image_base64", base64}, {"mime_type", mime} };
+}
+
+// Load a binary file from backend/tests/fixtures/ and base64-encode it.
+// HYNI_TEST_FIXTURES_DIR is injected by CMake so this works regardless of
+// where the test binary is launched from.
+std::string load_fixture_base64(const std::string& filename) {
+    const char* dir_env = std::getenv("HYNI_TEST_FIXTURES_DIR");
+    const std::string dir = dir_env ? dir_env
+                                    : (std::filesystem::current_path() / "fixtures").string();
+    const auto path = std::filesystem::path(dir) / filename;
+    std::ifstream in(path, std::ios::binary);
+    if (!in) throw std::runtime_error("fixture not found: " + path.string());
+    std::ostringstream ss; ss << in.rdbuf();
+    const std::string raw = ss.str();
+
+    static constexpr char tbl[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((raw.size() + 2) / 3) * 4);
+    for (std::size_t i = 0; i < raw.size(); i += 3) {
+        const std::uint32_t b0 = static_cast<unsigned char>(raw[i]);
+        const std::uint32_t b1 = i + 1 < raw.size() ? static_cast<unsigned char>(raw[i + 1]) : 0;
+        const std::uint32_t b2 = i + 2 < raw.size() ? static_cast<unsigned char>(raw[i + 2]) : 0;
+        const std::uint32_t triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push_back(tbl[(triple >> 18) & 0x3F]);
+        out.push_back(tbl[(triple >> 12) & 0x3F]);
+        out.push_back(i + 1 < raw.size() ? tbl[(triple >> 6) & 0x3F] : '=');
+        out.push_back(i + 2 < raw.size() ? tbl[ triple        & 0x3F] : '=');
+    }
+    return out;
+}
+
+// Lowercase a copy of `s` for case-insensitive substring search.
+std::string to_lower(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
 }
 
 } // namespace
@@ -408,4 +447,82 @@ TEST_F(HyniWebApiTest, StreamReturnsMultipleDeltaFrames) {
     EXPECT_GE(frames, 2u) << "expected at least one delta and one done frame";
     EXPECT_GE(deltas, 1u) << "expected at least one delta frame";
     EXPECT_TRUE(done) << "no done frame received";
+}
+
+// ============================================================================
+// Real-screenshot regression: "refactor everything visible"
+//
+// User report: pasting THREE screenshots of a C# project + the prompt
+// "can you refactor the code" — GPT-4o refactored only one method
+// (GetUserByEmail). Claude Sonnet covered more. Coding-mode system prompt
+// rule 7 explicitly tells the model to address every code unit it sees.
+// This test confirms the rule fires for BOTH providers using the real
+// screenshots that triggered the report.
+//
+// The fixtures live in backend/tests/fixtures/coding_refactor_{1,2,3}.png
+// and visibly contain four methods total:
+//   ClientRepository.GetAll        — coding_refactor_1.png
+//   UserService.UpdateUser         — coding_refactor_2.png (left pane)
+//   UserService.GetAllUsers        — coding_refactor_2.png (right pane)
+//   UserService.GetUserByEmail     — coding_refactor_3.png
+// ============================================================================
+
+namespace {
+// Assert the model named every visible method. We accept case-insensitive,
+// partial-substring matches because the names are distinctive (no false
+// positives in a C# refactor response).
+void expect_all_methods_mentioned(const std::string& content) {
+    const std::string lower = to_lower(content);
+    for (const char* name : { "getall", "getallusers", "updateuser", "getuserbyemail" }) {
+        EXPECT_NE(lower.find(name), std::string::npos)
+            << "expected '" << name << "' to appear in reply. content head: "
+            << content.substr(0, std::min<std::size_t>(content.size(), 800));
+    }
+}
+} // namespace
+
+class CodingMultiUnitTest : public HyniWebApiTest {
+protected:
+    json build_refactor_body(const std::string& provider) {
+        // Lazy-load fixtures so the suite still runs if fixtures are absent.
+        const std::string b1 = load_fixture_base64("coding_refactor_1.png");
+        const std::string b2 = load_fixture_base64("coding_refactor_2.png");
+        const std::string b3 = load_fixture_base64("coding_refactor_3.png");
+        return {
+            {"provider", provider},
+            {"mode", "coding"},
+            // Intentionally TERSE prompt that matches the original user
+            // report. The system-prompt rule must do the heavy lifting.
+            {"message", "can you refactor the code"},
+            {"max_tokens", 2000},
+            {"temperature", 0.0},
+            {"images", json::array({
+                {{"image_base64", b1}, {"mime_type", "image/png"}},
+                {{"image_base64", b2}, {"mime_type", "image/png"}},
+                {{"image_base64", b3}, {"mime_type", "image/png"}},
+            })},
+        };
+    }
+};
+
+TEST_F(CodingMultiUnitTest, OpenAiRefactorsAllVisibleMethods) {
+    if (!live_llm()) GTEST_SKIP() << "HYNI_TESTS_LIVE_LLM not set";
+    const auto body = build_refactor_body("openai");
+    const auto r = http.post_json(base_url() + "/api/chat",
+                                  body.dump(), auth_headers());
+    ASSERT_EQ(r.status, 200) << r.body.substr(0, 500);
+    const auto j = json::parse(r.body);
+    ASSERT_TRUE(j["success"].get<bool>()) << j.dump(2);
+    expect_all_methods_mentioned(j["content"].get<std::string>());
+}
+
+TEST_F(CodingMultiUnitTest, AnthropicRefactorsAllVisibleMethods) {
+    if (!live_llm()) GTEST_SKIP() << "HYNI_TESTS_LIVE_LLM not set";
+    const auto body = build_refactor_body("anthropic");
+    const auto r = http.post_json(base_url() + "/api/chat",
+                                  body.dump(), auth_headers());
+    ASSERT_EQ(r.status, 200) << r.body.substr(0, 500);
+    const auto j = json::parse(r.body);
+    ASSERT_TRUE(j["success"].get<bool>()) << j.dump(2);
+    expect_all_methods_mentioned(j["content"].get<std::string>());
 }

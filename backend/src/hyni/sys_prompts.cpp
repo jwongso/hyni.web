@@ -26,7 +26,13 @@ constexpr const char CODING_BASE[] =
     "   top in a single line, then proceed. Do not ask the user clarifying\n"
     "   questions — there is no chance for them to answer mid-interview.\n"
     "5. Prefer clarity over cleverness. Use descriptive names.\n"
-    "6. Include 1-3 quick example calls or a tiny test block.";
+    "6. Include 1-3 quick example calls or a tiny test block.\n"
+    "7. When MULTIPLE code units appear in attached images or in the prompt\n"
+    "   (e.g. several methods, classes, or files spread across screenshots),\n"
+    "   address EVERY one of them — not just the first or the most\n"
+    "   interesting. Begin by listing the units you found by name, then\n"
+    "   show the rewritten code for each. Group results by source file when\n"
+    "   that is visible.";
 
 constexpr const char SYSTEM_DESIGN_BASE[] =
     "You are a senior system architect preparing the candidate for system\n"
