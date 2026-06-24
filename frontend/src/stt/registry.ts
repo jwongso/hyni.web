@@ -1,13 +1,11 @@
 // Centralised STT adapter registry.
 //
-// Adapters self-register at module load (their import side-effects call
-// registerAdapter). This file deliberately re-exports nothing about the
-// concrete adapters — UI code interacts with the registry only, so adding
-// a new STT engine is a single-file change.
-//
-// The `bootstrap()` call below ensures every shipped adapter is imported
-// at least once so its side-effect registration runs even if no other
-// module imports it directly.
+// Adapters self-register at module load via `registerAdapter()`. The list
+// of shipped adapters is materialised by `src/stt/init.ts`, which is
+// imported once at app startup from `main.tsx` — that guarantees every
+// adapter module has executed (and registered) before any consumer calls
+// `listAdapters()` / `createRecognizer()`. Keep init.ts in sync when
+// adding a new engine.
 
 import type {
   AdapterRegistration,
@@ -27,14 +25,12 @@ export function registerAdapter(reg: AdapterRegistration): void {
 }
 
 export function listAdapters(): RecognizerMeta[] {
-  bootstrap();
   return Array.from(registry.values())
     .map((r) => r.meta)
     .sort((a, b) => a.label.localeCompare(b.label));
 }
 
 export function getAdapter(id: SttEngineId): AdapterRegistration {
-  bootstrap();
   const reg = registry.get(id);
   if (!reg) throw new Error(`Unknown STT engine: ${id}`);
   return reg;
@@ -42,19 +38,4 @@ export function getAdapter(id: SttEngineId): AdapterRegistration {
 
 export function createRecognizer(id: SttEngineId): SpeechRecognizer {
   return getAdapter(id).create();
-}
-
-// Force-import every shipped adapter so its registerAdapter() side effect
-// runs. Tree-shakers respect import-for-side-effect when the file does
-// nothing else exportable — adapter modules use a top-level registerAdapter
-// call so the side effect is preserved.
-let booted = false;
-function bootstrap(): void {
-  if (booted) return;
-  booted = true;
-  // Side-effect imports — order does not matter functionally.
-  /* eslint-disable @typescript-eslint/no-require-imports */
-  void import('./WebSpeechAdapter');
-  void import('./WstreamAdapter');
-  void import('./TransformersJsAdapter');
 }
