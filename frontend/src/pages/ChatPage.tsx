@@ -3,6 +3,7 @@ import { ChatMessages } from '../components/ChatMessages';
 import { ImageDropZone } from '../components/ImageDropZone';
 import { ModeToggle } from '../components/ModeToggle';
 import { fetchConfig, postChat, postChatStream } from '../lib/api';
+import { fileToBase64 } from '../lib/files';
 import { storage } from '../lib/storage';
 import type {
   AppSettings,
@@ -65,6 +66,60 @@ export function ChatPage() {
 
   // --- TTS --------------------------------------------------------------
   const tts = useSpeaker(settings.tts_engine);
+
+  // Page-wide drag-and-drop: dropping image files anywhere on the chat
+  // (textarea, message scroll area, toolbar, anywhere) attaches them as
+  // pending images. This is what ChatGPT / Claude do — dropping on the
+  // textarea by mistake otherwise inserts the file paths as plain text
+  // which the LLM cannot see as images.
+  const [pageDragOver, setPageDragOver] = useState(false);
+  const dragCountRef = useRef(0);
+  useEffect(() => {
+    const isFileDrag = (e: DragEvent) =>
+      Array.from(e.dataTransfer?.types ?? []).includes('Files');
+
+    const onEnter = (e: DragEvent) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      dragCountRef.current += 1;
+      setPageDragOver(true);
+    };
+    const onOver = (e: DragEvent) => {
+      if (!isFileDrag(e)) return;
+      // preventDefault on dragover is what enables drop on the target.
+      e.preventDefault();
+    };
+    const onLeave = (e: DragEvent) => {
+      if (!isFileDrag(e)) return;
+      // dragleave fires when crossing child boundaries; track depth so the
+      // overlay only disappears when the cursor truly leaves the page.
+      dragCountRef.current = Math.max(0, dragCountRef.current - 1);
+      if (dragCountRef.current === 0) setPageDragOver(false);
+    };
+    const onDrop = async (e: DragEvent) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      dragCountRef.current = 0;
+      setPageDragOver(false);
+      const files = Array.from(e.dataTransfer?.files ?? []).filter(
+        (f) => f.type.startsWith('image/'),
+      );
+      if (files.length === 0) return;
+      const encoded = await Promise.all(files.map(fileToBase64));
+      setPendingImgs((prev) => [...prev, ...encoded]);
+    };
+
+    window.addEventListener('dragenter', onEnter);
+    window.addEventListener('dragover',  onOver);
+    window.addEventListener('dragleave', onLeave);
+    window.addEventListener('drop',      onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onEnter);
+      window.removeEventListener('dragover',  onOver);
+      window.removeEventListener('dragleave', onLeave);
+      window.removeEventListener('drop',      onDrop);
+    };
+  }, [setPendingImgs]);
 
   // Load server config + reload settings on focus (so Settings-page edits
   // in another tab propagate without a manual refresh).
@@ -226,6 +281,14 @@ export function ChatPage() {
 
   return (
     <div className="chat">
+      {pageDragOver && (
+        <div className="drop-overlay">
+          <div className="drop-overlay__inner">
+            <div style={{ fontSize: '2rem' }}>📥</div>
+            <div>Drop images to attach to your next message</div>
+          </div>
+        </div>
+      )}
       <div className="toolbar">
         <ModeToggle value={mode} onChange={setMode} disabled={sending} />
         <span className="status-pill" title="Change in Settings">STT: {settings.stt_engine}</span>
