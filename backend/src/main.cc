@@ -12,7 +12,9 @@
 // relative to the binary). The path can be overridden with the first CLI
 // argument.
 
+#include "hyni/mcp_client.h"
 #include <drogon/drogon.h>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -36,7 +38,6 @@ void install_coop_coep_headers() {
 std::string resolve_config_path(int argc, char* argv[]) {
     if (argc >= 2) return argv[1];
 
-    // Look for ../config/drogon.json relative to the executable, then CWD.
     fs::path exe;
     try { exe = fs::canonical("/proc/self/exe"); } catch (...) {}
     if (!exe.empty()) {
@@ -47,6 +48,18 @@ std::string resolve_config_path(int argc, char* argv[]) {
     const fs::path cwd_candidate = fs::path("config") / "drogon.json";
     if (fs::exists(cwd_candidate)) return cwd_candidate.string();
     return "config/drogon.json";
+}
+
+// Spawn every MCP server listed in HYNI_MCP_SERVERS. Failed entries are
+// logged and skipped — the server still starts (MCP is opt-in).
+void start_mcp_servers() {
+    const char* raw = std::getenv("HYNI_MCP_SERVERS");
+    if (!raw || !*raw) return;
+    const auto specs = hyni::mcp::parse_servers_env(raw);
+    if (specs.empty()) return;
+    const std::size_t up = hyni::mcp::registry::startup(specs);
+    std::cout << "[hyni.web] MCP servers: " << up << " of " << specs.size()
+              << " healthy" << std::endl;
 }
 
 } // namespace
@@ -64,7 +77,14 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    start_mcp_servers();
+    // Tear MCP servers down cleanly on process exit (also fires on the
+    // SIGTERM path Drogon installs internally — at that point our atexit
+    // handler still gets to send SIGTERM to children and waitpid them).
+    std::atexit([]() { hyni::mcp::registry::shutdown(); });
+
     std::cout << "[hyni.web] Starting server..." << std::endl;
     drogon::app().run();
+    hyni::mcp::registry::shutdown();
     return 0;
 }

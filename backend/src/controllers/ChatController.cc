@@ -1,8 +1,13 @@
 #include "ChatController.h"
 #include "../hyni/web_client.h"
+#include "../hyni/mcp_client.h"
 
 #include <cstdlib>
+#include <map>
 #include <string>
+#include <vector>
+#include <utility>
+#include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include <simdjson.h>
 
@@ -254,6 +259,33 @@ void ChatController::getConfig(const drogon::HttpRequestPtr& req,
     body["modes"]              = {"general", "coding", "behavioral"};
     body["owner_mode_enabled"] = owner_mode;
     body["is_owner"]           = owner;
+
+    // MCP tools summary so the frontend can show a "🛠 N tools" pill in
+    // the Chat header. We don't expose the full schema here — too verbose
+    // for a config probe. Frontend can hit a dedicated endpoint later
+    // when we add a Settings panel for it.
+    {
+        json mcp = json::object();
+        json servers = json::array();
+        std::size_t total_tools = 0;
+        for (const auto& t : hyni::mcp::registry::tools()) {
+            total_tools += 1;
+            // Group by server name in a tiny aggregation pass.
+            (void)t.server_name; // suppress -Wunused if compiled out
+        }
+        // Per-server view: collapse the tool list to a name + count.
+        std::map<std::string, int> per_server;
+        for (const auto& t : hyni::mcp::registry::tools()) ++per_server[t.server_name];
+        for (const auto& [name, count] : per_server) {
+            servers.push_back({{"name", name}, {"tool_count", count}});
+        }
+        mcp["enabled"]      = hyni::mcp::registry::any_alive();
+        mcp["server_count"] = static_cast<int>(per_server.size());
+        mcp["tool_count"]   = static_cast<int>(total_tools);
+        mcp["servers"]      = std::move(servers);
+        body["mcp"]         = std::move(mcp);
+    }
+
     callback(json_response(body));
 }
 
@@ -292,6 +324,13 @@ void ChatController::postChat(const drogon::HttpRequestPtr& req,
     }
     const std::string api_key = key_pick.key;
 
+    // Attach the MCP tool catalogue when at least one server is alive.
+    // Empty array is harmless — send_chat() short-circuits when there are
+    // no tools to advertise.
+    if (hyni::mcp::registry::any_alive() && cr.tools.empty()) {
+        cr.tools = hyni::mcp::registry::tools_openai_schema();
+    }
+
     // Run blocking libcurl call off the event loop thread.
     drogon::app().getIOLoop(0)->queueInLoop([cr, api_key, callback = std::move(callback)]() mutable {
         hyni::chat_result result = hyni::send_chat(cr, api_key);
@@ -306,6 +345,21 @@ void ChatController::postChat(const drogon::HttpRequestPtr& req,
             {"completion_tokens", result.completion_tokens}
         };
         resp["http_status"] = result.http_status;
+
+        // Surface every tool call so the frontend can render a "tool
+        // calls" disclosure under the assistant bubble.
+        json tcs = json::array();
+        for (const auto& c : result.tool_calls) {
+            tcs.push_back({
+                {"id",         c.id},
+                {"name",       c.name},
+                {"arguments",  c.arguments},
+                {"result",     c.result_text},
+                {"is_error",   c.is_error},
+                {"latency_ms", c.latency_ms},
+            });
+        }
+        resp["tool_calls"] = std::move(tcs);
 
         callback(json_response(resp,
                                result.success ? drogon::k200OK : drogon::k502BadGateway));
@@ -399,6 +453,154 @@ void ChatController::postChatStream(const drogon::HttpRequestPtr& req,
     resp->setContentTypeCodeAndCustomString(drogon::CT_CUSTOM, "Content-Type: text/event-stream\r\n");
     resp->addHeader("Cache-Control",  "no-cache, no-transform");
     resp->addHeader("X-Accel-Buffering", "no");  // disable buffering at reverse proxies (Cloudflare, nginx)
+    callback(resp);
+}
+
+// ---- Local LLM scan --------------------------------------------------------
+//
+// Probes the well-known local-LLM ports for an OpenAI-compatible `/v1/models`
+// endpoint. Runs server-side because:
+//   1) The SPA is often served over HTTPS (Cloudflare Tunnel) and browsers
+//      block mixed-content fetches to http://localhost:....
+//   2) Browsers also enforce CORS; most local LLM servers don't set
+//      Access-Control-Allow-Origin.
+//   3) Server-side libcurl parallelism is just simpler.
+//
+// We never expose this externally — Local provider is treated as auth-less
+// localhost-only by design, so there's no key leak risk. We DO time each
+// probe out aggressively (1.5s) so a misbehaving service can't stall the
+// caller.
+
+namespace {
+
+struct probe_result {
+    std::string url;
+    std::string runtime;       // best-guess label (llama.cpp / ollama / ...)
+    bool        alive   = false;
+    int         http_status = 0;
+    std::vector<std::string> models;
+    std::string error;
+};
+
+// Build the libcurl callback that appends to a std::string.
+size_t curl_str_append(char* p, size_t s, size_t n, void* ud) {
+    static_cast<std::string*>(ud)->append(p, s * n);
+    return s * n;
+}
+
+probe_result probe_one(const std::string& base_url, const std::string& runtime_hint) {
+    probe_result r;
+    r.url     = base_url;
+    r.runtime = runtime_hint;
+
+    // OpenAI-compatible servers expose GET /v1/models.
+    const std::string url = base_url + "/v1/models";
+    std::string body;
+
+    CURL* curl = curl_easy_init();
+    if (!curl) { r.error = "curl_easy_init failed"; return r; }
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1500L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 800L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_str_append);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+
+    const CURLcode rc = curl_easy_perform(curl);
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    curl_easy_cleanup(curl);
+
+    r.http_status = static_cast<int>(http_code);
+    if (rc != CURLE_OK) {
+        r.error = curl_easy_strerror(rc);
+        return r;
+    }
+    if (http_code != 200 || body.empty()) {
+        r.error = "HTTP " + std::to_string(http_code);
+        return r;
+    }
+
+    // Parse {data: [{id: "...", ...}, ...]} (OpenAI-style). Tolerate Ollama's
+    // /api/tags shape too if we ever switch; for now /v1/models is universal.
+    try {
+        simdjson::ondemand::parser parser;
+        simdjson::padded_string padded(body);
+        simdjson::ondemand::document doc;
+        if (parser.iterate(padded).get(doc) != simdjson::SUCCESS) {
+            r.error = "parse error";
+            return r;
+        }
+        simdjson::ondemand::array arr;
+        if (doc["data"].get_array().get(arr) != simdjson::SUCCESS) {
+            r.error = "no .data";
+            return r;
+        }
+        for (auto el : arr) {
+            simdjson::ondemand::value v;
+            if (el.get(v) != simdjson::SUCCESS) continue;
+            std::string_view id;
+            if (v["id"].get(id) == simdjson::SUCCESS) {
+                r.models.emplace_back(id.data(), id.size());
+            }
+        }
+        r.alive = true;
+    } catch (const std::exception& e) {
+        r.error = e.what();
+    }
+    return r;
+}
+
+} // namespace
+
+void ChatController::getLocalScan(const drogon::HttpRequestPtr& /*req*/,
+                                  std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+    // Well-known local LLM ports. Order: most popular first so the UI
+    // shows them naturally. Add or override via the `urls` query param
+    // (comma-separated) if you want to scan custom endpoints too.
+    const std::vector<std::pair<std::string, std::string>> targets = {
+        {"http://localhost:8080",  "llama.cpp"},
+        {"http://localhost:11434", "ollama"},
+        {"http://localhost:8000",  "vllm"},
+        {"http://localhost:1234",  "lm-studio"},
+        {"http://localhost:5000",  "text-generation-webui"},
+        // Override LOCAL_LLM_URL: if it points somewhere we don't already
+        // scan, add it. Stripped of any trailing /v1/chat/completions.
+    };
+
+    std::vector<std::pair<std::string, std::string>> work = targets;
+    {
+        std::string env_url = getenv_str("LOCAL_LLM_URL");
+        if (!env_url.empty()) {
+            // Strip /v1/... suffix to get a base URL.
+            auto pos = env_url.find("/v1");
+            if (pos != std::string::npos) env_url = env_url.substr(0, pos);
+            bool already = false;
+            for (const auto& t : targets) if (t.first == env_url) { already = true; break; }
+            if (!already) work.emplace_back(env_url, "configured");
+        }
+    }
+
+    json out = json::array();
+    for (const auto& [url, hint] : work) {
+        const probe_result r = probe_one(url, hint);
+        json entry;
+        entry["url"]         = r.url;
+        entry["runtime"]     = r.runtime;
+        entry["alive"]       = r.alive;
+        entry["http_status"] = r.http_status;
+        entry["models"]      = r.models;
+        if (!r.error.empty()) entry["error"] = r.error;
+        // Suggested URL for the Local provider field (the full chat endpoint).
+        entry["chat_url"]    = r.url + "/v1/chat/completions";
+        out.push_back(std::move(entry));
+    }
+
+    auto resp = HttpResponse::newHttpResponse();
+    resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+    resp->setStatusCode(drogon::k200OK);
+    resp->setBody(json{{"candidates", out}}.dump());
     callback(resp);
 }
 

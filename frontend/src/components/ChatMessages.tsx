@@ -52,6 +52,48 @@ function Markdown({ text }: { text: string }) {
   );
 }
 
+// Collapsible tool-call disclosure. One <details> per call; the summary
+// shows the qualified tool name + a short arg preview, and the body shows
+// the full args (pretty-printed) and the flattened result text.
+function ToolCallsBlock({ calls }: { calls: NonNullable<ChatMessage['tool_calls']> }) {
+  if (!calls || calls.length === 0) return null;
+  return (
+    <details className="tool-calls" open={false}>
+      <summary>
+        🛠 {calls.length} tool call{calls.length === 1 ? '' : 's'}
+        <span className="tool-calls__hint">(click to expand)</span>
+      </summary>
+      <div className="tool-calls__body">
+        {calls.map((c, i) => {
+          const args = (() => {
+            try { return JSON.stringify(c.arguments, null, 2); }
+            catch { return String(c.arguments ?? '{}'); }
+          })();
+          return (
+            <div key={i} className={'tool-call ' + (c.is_error ? 'tool-call--err' : '')}>
+              <div className="tool-call__head">
+                <span className="tool-call__name">{c.name}</span>
+                {c.latency_ms > 0 && (
+                  <span className="tool-call__latency">{c.latency_ms}ms</span>
+                )}
+                {c.is_error && <span className="tool-call__badge">error</span>}
+              </div>
+              <details className="tool-call__args" open={false}>
+                <summary>args</summary>
+                <pre>{args}</pre>
+              </details>
+              <details className="tool-call__result" open={false}>
+                <summary>result</summary>
+                <pre>{c.result}</pre>
+              </details>
+            </div>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
 // Collapsible chain-of-thought disclosure. Default-collapsed so the visible
 // answer stays clean; the user can open it if they want to see how the
 // reasoning model got there.
@@ -98,6 +140,8 @@ export function ChatMessages({
                 <CopyButton text={m.text} title="Copy reply" />
               )}
             </div>
+            {isAsst && m.tool_calls && m.tool_calls.length > 0
+              ? <ToolCallsBlock calls={m.tool_calls} /> : null}
             {isAsst && m.reasoning ? <ReasoningBlock text={m.reasoning} /> : null}
             {isAsst ? <Markdown text={m.text} /> : m.text}
             {m.images && m.images.length > 0 && (

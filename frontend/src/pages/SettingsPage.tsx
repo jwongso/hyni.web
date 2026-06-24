@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { fetchConfig, probeProviderKey } from '../lib/api';
+import { fetchConfig, probeProviderKey, scanLocalLLMs, type LocalScanCandidate } from '../lib/api';
 import { storage } from '../lib/storage';
 import { isPdfFile, pdfToText } from '../lib/pdf';
 import {
@@ -33,6 +33,8 @@ export function SettingsPage() {
   const [keyShow,  setKeyShow]   = useState<Record<string, boolean>>({});
   const [showOwner, setShowOwner] = useState(false);
   const [probe,    setProbe]     = useState<Record<string, string>>({});
+  const [scanBusy, setScanBusy]  = useState(false);
+  const [scanResults, setScanResults] = useState<LocalScanCandidate[] | null>(null);
 
   useEffect(() => {
     fetchConfig().then(setConfig).catch(() => {});
@@ -76,6 +78,36 @@ export function SettingsPage() {
     storage.clearAll();
     setProfile(EMPTY_PROFILE);
     setSettings(DEFAULT_SETTINGS);
+  };
+
+  // Scan well-known local-LLM ports server-side and surface the results so
+  // the user can click one to populate local_url + model in a single tap.
+  const scanLocal = async () => {
+    setScanBusy(true);
+    setScanResults(null);
+    try {
+      const r = await scanLocalLLMs();
+      setScanResults(r.candidates);
+    } catch (e: any) {
+      setSaved(`Scan failed: ${e?.message ?? String(e)}`);
+      setTimeout(() => setSaved(''), 4000);
+    } finally {
+      setScanBusy(false);
+    }
+  };
+
+  const applyScanResult = (c: LocalScanCandidate) => {
+    // Switch the active provider to local, point at this URL, and if the
+    // server returned any models, default to the first one.
+    const next: AppSettings = {
+      ...settings,
+      provider:  'local',
+      local_url: c.chat_url,
+      model:     c.models[0] ?? settings.model,
+    };
+    setSettings(next);
+    setSaved(`Selected ${c.runtime} at ${c.url}` + (c.models[0] ? ` · ${c.models[0]}` : ''));
+    setTimeout(() => setSaved(''), 3000);
   };
 
   // Reset only the STT/TTS engine choices to defaults (Web Speech for both),
@@ -346,24 +378,66 @@ export function SettingsPage() {
       <h2>Local LLM endpoint <small style={{ color: 'var(--muted)' }}>(llama.cpp / Ollama / vLLM / LM Studio)</small></h2>
       <div className="field">
         <label>OpenAI-compatible URL</label>
-        <input
-          type="url"
-          autoComplete="off"
-          spellCheck={false}
-          placeholder="http://localhost:8080/v1/chat/completions"
-          value={settings.local_url}
-          onChange={(e) => settingsChange('local_url', e.target.value)}
-          style={{ fontFamily: 'var(--mono)' }}
-        />
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <input
+            type="url"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="http://localhost:8080/v1/chat/completions"
+            value={settings.local_url}
+            onChange={(e) => settingsChange('local_url', e.target.value)}
+            style={{ fontFamily: 'var(--mono)', flex: '1 1 auto' }}
+          />
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void scanLocal()}
+            disabled={scanBusy}
+            title="Probe well-known local-LLM ports (server-side) and show what's running."
+          >
+            {scanBusy ? 'Scanning…' : '🔍 Scan'}
+          </button>
+        </div>
         <small>
           Leave blank to use the server's <code>LOCAL_LLM_URL</code> env var
           (default <code>http://localhost:8080/v1/chat/completions</code>).
-          Must include the full path. Examples:&nbsp;
-          <code>localhost:8080</code> = llama.cpp,&nbsp;
-          <code>localhost:11434</code> = Ollama,&nbsp;
-          <code>localhost:1234</code> = LM Studio.
+          Must include the full path. The <strong>Scan</strong> button probes
+          the server's localhost for llama.cpp / Ollama / vLLM / LM Studio.
         </small>
       </div>
+      {scanResults && (
+        <div className="scan-results">
+          <div className="scan-results__header">
+            Scan results — click an entry to use it
+          </div>
+          {scanResults.length === 0 && (
+            <div className="scan-results__empty">No candidates probed.</div>
+          )}
+          {scanResults.map((c) => (
+            <button
+              key={c.url}
+              type="button"
+              className={'scan-results__row ' + (c.alive ? 'ok' : 'down')}
+              onClick={() => c.alive && applyScanResult(c)}
+              disabled={!c.alive}
+              title={c.alive
+                ? `Use ${c.runtime} at ${c.url}` + (c.models[0] ? ` · ${c.models[0]}` : '')
+                : c.error || 'Not reachable'}
+            >
+              <span className="scan-results__dot" aria-hidden="true" />
+              <span className="scan-results__rt">{c.runtime}</span>
+              <span className="scan-results__url">{c.url}</span>
+              <span className="scan-results__status">
+                {c.alive
+                  ? (c.models[0]
+                      ? `${c.models[0]}${c.models.length > 1 ? ` (+${c.models.length - 1})` : ''}`
+                      : 'alive (no models reported)')
+                  : (c.error || 'down')}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* ===== Owner token ========================================== */}
       {ownerModeServer && (

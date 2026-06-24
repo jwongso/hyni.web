@@ -252,6 +252,7 @@ export function ChatPage() {
         const asst: ChatMessage = {
           role: 'assistant', text: reply.content, at: Date.now(),
           provider: settings.provider, model: settings.model,
+          tool_calls: reply.tool_calls && reply.tool_calls.length ? reply.tool_calls : undefined,
         };
         setHistory([...nextHistory, asst]);
         if (settings.speak_replies) {

@@ -42,6 +42,15 @@ export interface ImageData {
   mime_type: string;
 }
 
+export interface ToolCallLog {
+  id:         string;
+  name:       string;
+  arguments:  unknown;
+  result:     string;
+  is_error:   boolean;
+  latency_ms: number;
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
@@ -53,6 +62,8 @@ export interface ChatMessage {
   provider?: string;
   /** Reasoning-model chain-of-thought; rendered in a collapsible widget. */
   reasoning?: string;
+  /** Tool calls executed during this response (MCP-backed). */
+  tool_calls?: ToolCallLog[];
 }
 
 export interface UserProfile {
@@ -163,4 +174,6 @@ export interface ChatResponseBody {
   latency_ms: number;
   usage: { prompt_tokens: number; completion_tokens: number };
   http_status: number;
+  /** MCP tool calls executed during this turn. Empty when no tools fired. */
+  tool_calls?: ToolCallLog[];
 }

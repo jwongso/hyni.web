@@ -135,6 +135,7 @@ endif()
 add_library(hyni_core STATIC
     src/hyni/web_client.cpp
     src/hyni/sys_prompts.cpp
+    src/hyni/mcp_client.cpp
 )
 target_include_directories(hyni_core PUBLIC src)
 target_link_libraries(hyni_core

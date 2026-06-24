@@ -163,3 +163,34 @@ export async function probeProviderKey(
     api_key: apiKey,
   });
 }
+
+// -----------------------------------------------------------------------------
+// Local LLM scan
+// -----------------------------------------------------------------------------
+
+export interface LocalScanCandidate {
+  url: string;
+  chat_url: string;
+  runtime: string;
+  alive: boolean;
+  http_status: number;
+  models: string[];
+  error?: string;
+}
+
+export interface LocalScanResponse {
+  candidates: LocalScanCandidate[];
+}
+
+/**
+ * Probe well-known local-LLM endpoints (server-side, to bypass mixed-content
+ * + CORS restrictions). Returns one entry per candidate URL with `alive`,
+ * `models`, and the suggested `chat_url` to plug into Local provider settings.
+ */
+export async function scanLocalLLMs(): Promise<LocalScanResponse> {
+  const res = await fetch('/api/local/scan', {
+    headers: { ...ownerAuthHeader() },
+  });
+  if (!res.ok) throw new Error(`scan: HTTP ${res.status}`);
+  return res.json();
+}

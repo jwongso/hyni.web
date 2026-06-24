@@ -5,14 +5,17 @@
 namespace hyniweb {
 
 // REST endpoints:
-//   GET  /api/config        -> which providers have keys, defaults
-//   POST /api/chat          -> stateless chat completion
+//   GET  /api/config            -> which providers have keys, defaults
+//   POST /api/chat              -> stateless chat completion
+//   POST /api/chat/stream       -> SSE-streamed chat completion
+//   GET  /api/local/scan        -> probe well-known local LLM ports + models
 class ChatController : public drogon::HttpController<ChatController> {
 public:
     METHOD_LIST_BEGIN
     ADD_METHOD_TO(ChatController::getConfig,     "/api/config",       drogon::Get,  drogon::Options);
     ADD_METHOD_TO(ChatController::postChat,      "/api/chat",         drogon::Post, drogon::Options);
     ADD_METHOD_TO(ChatController::postChatStream,"/api/chat/stream",  drogon::Post, drogon::Options);
+    ADD_METHOD_TO(ChatController::getLocalScan,  "/api/local/scan",   drogon::Get,  drogon::Options);
     METHOD_LIST_END
 
     void getConfig(const drogon::HttpRequestPtr& req,
@@ -23,6 +26,9 @@ public:
 
     void postChatStream(const drogon::HttpRequestPtr& req,
                         std::function<void(const drogon::HttpResponsePtr&)>&& callback);
+
+    void getLocalScan(const drogon::HttpRequestPtr& req,
+                      std::function<void(const drogon::HttpResponsePtr&)>&& callback);
 };
 
 } // namespace hyniweb

@@ -34,6 +34,34 @@ struct chat_request {
      * Must include the full path (e.g. http://localhost:8080/v1/chat/completions).
      */
     std::string local_url;
+    /**
+     * OpenAI-format tools array (`[{type:"function", function:{name, description, parameters}}, ...]`).
+     * When non-empty AND the provider is OpenAI-compatible (OpenAI /
+     * DeepSeek / Mistral / Local) we advertise these to the model. The
+     * tool-call loop inside send_chat() invokes each call via
+     * hyni::mcp::registry::call() and feeds the result back. Empty for
+     * Anthropic in V1 (different tool format) and as a fallback when no
+     * MCP servers are configured.
+     */
+    nlohmann::json tools = nlohmann::json::array();
+    /**
+     * Hard cap on the number of tool-call rounds before we give up and
+     * return whatever text the model has produced. Prevents runaway loops
+     * on misbehaving tools / models.
+     */
+    int max_tool_rounds = 5;
+};
+
+// A single LLM-driven invocation of a tool. Used both for echoing back to
+// the UI ("here's what I asked nz-legal__legal_search and here's what I
+// got") and for the assistant -> tool message chain inside send_chat().
+struct tool_call_log {
+    std::string id;            // OpenAI's call id (used for the tool reply role)
+    std::string name;          // qualified MCP tool name ("server__tool")
+    nlohmann::json arguments;  // parsed JSON arguments the model produced
+    std::string result_text;   // flattened text content returned by the tool
+    bool        is_error = false;
+    long long   latency_ms = 0;
 };
 
 struct chat_result {
@@ -45,6 +73,9 @@ struct chat_result {
     // Optional usage metrics if the provider returns them.
     int prompt_tokens = 0;
     int completion_tokens = 0;
+    // Tool calls executed during this request (in order). Empty if the
+    // model didn't use tools.
+    std::vector<tool_call_log> tool_calls;
 };
 
 // Build the request payload for the given provider. Exposed for testing.

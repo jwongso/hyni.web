@@ -1,4 +1,5 @@
 #include "web_client.h"
+#include "mcp_client.h"
 
 #include <chrono>
 #include <cstring>
@@ -304,6 +305,41 @@ nlohmann::json build_payload(const chat_request& req) {
     return payload;
 }
 
+// Extracted helper: extracts tool_calls from a parsed `message` object.
+// Returns the array of tool_call_log entries (without result_text — that's
+// filled in by the calling loop after dispatching to MCP). Cursor is
+// consumed; pass the message object AFTER content extraction.
+static void extract_tool_calls(simdjson::ondemand::value& message,
+                               std::vector<tool_call_log>& out) {
+    simdjson::ondemand::array tc_arr;
+    if (message["tool_calls"].get_array().get(tc_arr) != simdjson::SUCCESS) return;
+    for (auto el : tc_arr) {
+        simdjson::ondemand::value v;
+        if (el.get(v) != simdjson::SUCCESS) continue;
+        tool_call_log log;
+        std::string_view id_sv;
+        if (v["id"].get(id_sv) == simdjson::SUCCESS) log.id.assign(id_sv);
+        simdjson::ondemand::value fn;
+        if (v["function"].get(fn) != simdjson::SUCCESS) continue;
+        std::string_view name_sv;
+        if (fn["name"].get(name_sv) == simdjson::SUCCESS) log.name.assign(name_sv);
+        // `arguments` is a JSON STRING (per OpenAI's tool-calling spec)
+        // containing JSON. Parse the inner string into our json value.
+        std::string_view args_sv;
+        if (fn["arguments"].get(args_sv) == simdjson::SUCCESS && !args_sv.empty()) {
+            try {
+                log.arguments = nlohmann::json::parse(args_sv);
+            } catch (...) {
+                // Some Qwen versions emit pre-parsed objects; tolerate.
+                log.arguments = nlohmann::json::object();
+            }
+        } else {
+            log.arguments = nlohmann::json::object();
+        }
+        if (!log.name.empty()) out.push_back(std::move(log));
+    }
+}
+
 static chat_result parse_openai_response(const std::string& body, int http_status) {
     chat_result r;
     r.http_status = http_status;
@@ -385,10 +421,17 @@ static chat_result parse_openai_response(const std::string& body, int http_statu
             }
         }
 
+        // Tool calls (when the model wants to invoke a function). simdjson
+        // ondemand requires forward-only reads, so this MUST come after
+        // content / reasoning extraction on the same `message` cursor.
+        extract_tool_calls(message, r.tool_calls);
+
         break;  // first choice only — matches existing behaviour
     }
 
-    r.success = !r.content.empty();
+    // Success is content-non-empty OR tool calls were requested (the loop
+    // in send_chat continues with the tools).
+    r.success = !r.content.empty() || !r.tool_calls.empty();
     if (!r.success && r.error.empty()) {
         r.error = "Response was empty. If using a reasoning model "
                   "(Qwen3 / DeepSeek-R1 / GPT-5), try a larger max_tokens "
@@ -445,13 +488,65 @@ static chat_result parse_anthropic_response(const std::string& body, int http_st
     return r;
 }
 
+// Send a single HTTP POST to the provider. Returns the body + HTTP status
+// + curl rc + latency. No parsing. Used by send_chat() once per round of
+// the tool-call loop, and by send_chat_stream() at the top of its stream.
+namespace {
+struct post_outcome {
+    std::string  body;
+    long         http_status = 0;
+    CURLcode     curl_rc     = CURLE_OK;
+    long long    latency_ms  = 0;
+};
+
+post_outcome post_json(const std::string& url,
+                       const std::string& payload_str,
+                       const std::string& api_key,
+                       API_PROVIDER provider,
+                       int timeout_seconds) {
+    post_outcome o;
+    CURL* curl = curl_easy_init();
+    if (!curl) { o.curl_rc = CURLE_FAILED_INIT; return o; }
+
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    if (provider == API_PROVIDER::Anthropic) {
+        headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
+        const std::string h = "x-api-key: " + api_key;
+        headers = curl_slist_append(headers, h.c_str());
+    } else if (!api_key.empty()) {
+        const std::string h = "Authorization: Bearer " + api_key;
+        headers = curl_slist_append(headers, h.c_str());
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload_str.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(payload_str.size()));
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &o.body);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(timeout_seconds));
+    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2_0);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+
+    const auto t0 = std::chrono::steady_clock::now();
+    o.curl_rc = curl_easy_perform(curl);
+    const auto t1 = std::chrono::steady_clock::now();
+    o.latency_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &o.http_status);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    return o;
+}
+} // namespace
+
 chat_result send_chat(const chat_request& req, const std::string& api_key) {
-    chat_result r;
-    // Local provider (llama.cpp / vLLM / Ollama / LM Studio) is auth-less
-    // by default; only enforce a key for the cloud providers.
+    chat_result final_result;
     if (api_key.empty() && req.provider != API_PROVIDER::Local) {
-        r.error = "Missing API key for provider " + provider_to_str(req.provider);
-        return r;
+        final_result.error = "Missing API key for provider " + provider_to_str(req.provider);
+        return final_result;
     }
 
     const std::string url =
@@ -463,64 +558,115 @@ chat_result send_chat(const chat_request& req, const std::string& api_key) {
 
     nlohmann::json payload;
     try { payload = build_payload(req); }
-    catch (const std::exception& e) { r.error = e.what(); return r; }
+    catch (const std::exception& e) { final_result.error = e.what(); return final_result; }
 
-    const std::string payload_str = payload.dump();
-
-    CURL* curl = curl_easy_init();
-    if (!curl) { r.error = "curl_easy_init failed"; return r; }
-
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    if (req.provider == API_PROVIDER::Anthropic) {
-        headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
-        const std::string h = "x-api-key: " + api_key;
-        headers = curl_slist_append(headers, h.c_str());
-    } else if (!api_key.empty()) {
-        // OpenAI / DeepSeek / Mistral always require Bearer auth.
-        // Local: only attach if the user explicitly set a key (e.g. they
-        // front llama.cpp with an auth proxy).
-        const std::string h = "Authorization: Bearer " + api_key;
-        headers = curl_slist_append(headers, h.c_str());
+    // Tools are only injected for OpenAI-compatible providers. Anthropic
+    // uses a different tool format which we'll add in a later pass.
+    const bool tools_enabled =
+        !req.tools.empty() &&
+        req.provider != API_PROVIDER::Anthropic;
+    if (tools_enabled) {
+        payload["tools"]       = req.tools;
+        payload["tool_choice"] = "auto";
     }
 
-    std::string body;
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload_str.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(payload_str.size()));
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(req.timeout_seconds));
-    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2_0);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+    long long total_latency = 0;
+    int       http_status   = 0;
+    const int max_rounds    = std::max(1, req.max_tool_rounds + 1);
 
-    const auto t0 = std::chrono::steady_clock::now();
-    CURLcode rc   = curl_easy_perform(curl);
-    const auto t1 = std::chrono::steady_clock::now();
-    const long long latency_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    for (int round = 0; round < max_rounds; ++round) {
+        const std::string payload_str = payload.dump();
+        post_outcome out = post_json(url, payload_str, api_key,
+                                     req.provider, req.timeout_seconds);
+        total_latency += out.latency_ms;
+        http_status    = static_cast<int>(out.http_status);
 
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+        if (out.curl_rc != CURLE_OK) {
+            final_result.http_status = http_status;
+            final_result.latency_ms  = total_latency;
+            final_result.error = std::string("HTTP transport error: ") + curl_easy_strerror(out.curl_rc);
+            return final_result;
+        }
 
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
+        chat_result step = (req.provider == API_PROVIDER::Anthropic)
+            ? parse_anthropic_response(out.body, http_status)
+            : parse_openai_response  (out.body, http_status);
 
-    if (rc != CURLE_OK) {
-        r.http_status = static_cast<int>(http_code);
-        r.latency_ms  = latency_ms;
-        r.error = std::string("HTTP transport error: ") + curl_easy_strerror(rc);
-        return r;
+        // Carry over already-executed tool calls so the caller sees the
+        // full log when the loop finally finishes.
+        std::vector<tool_call_log> calls_this_round = std::move(step.tool_calls);
+        step.tool_calls.clear();
+
+        // Terminal case 1: no tool calls -> the model produced its final
+        // answer.
+        if (calls_this_round.empty()) {
+            step.latency_ms  = total_latency;
+            step.tool_calls  = std::move(final_result.tool_calls);
+            return step;
+        }
+
+        // Terminal case 2: we've hit the round budget — even though the
+        // model wants to keep calling tools, refuse and return what we
+        // have. Surface a hint in the error field so the UI can show it.
+        if (round + 1 == max_rounds) {
+            // Execute one more batch and stop, attaching results so the
+            // user can see the model's last attempt. Then return.
+            for (auto& call : calls_this_round) final_result.tool_calls.push_back(std::move(call));
+            final_result.success      = true;
+            final_result.content      = step.content;
+            final_result.http_status  = http_status;
+            final_result.latency_ms   = total_latency;
+            final_result.error        = "tool-call budget exhausted ("
+                                        + std::to_string(req.max_tool_rounds)
+                                        + " rounds); model may have wanted to keep going";
+            return final_result;
+        }
+
+        // Append the assistant message with its tool_calls to the running
+        // messages array so the next round has context.
+        nlohmann::json asst_msg = {
+            {"role", "assistant"},
+            // Some servers reject `content: null` while requiring it; an
+            // empty string is the safest portable form.
+            {"content", step.content.empty() ? "" : step.content},
+            {"tool_calls", nlohmann::json::array()},
+        };
+        for (const auto& c : calls_this_round) {
+            asst_msg["tool_calls"].push_back({
+                {"id",       c.id},
+                {"type",     "function"},
+                {"function", {
+                    {"name",      c.name},
+                    {"arguments", c.arguments.dump()},
+                }},
+            });
+        }
+        payload["messages"].push_back(asst_msg);
+
+        // Execute each tool call (sequentially — MCP is fast enough).
+        for (auto& call : calls_this_round) {
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto mcp_result = hyni::mcp::registry::call(call.name, call.arguments);
+            const auto t1 = std::chrono::steady_clock::now();
+            call.latency_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+            call.result_text = mcp_result.content_text;
+            call.is_error    = mcp_result.is_error;
+            payload["messages"].push_back({
+                {"role",         "tool"},
+                {"tool_call_id", call.id},
+                {"content",      call.result_text.empty()
+                                   ? (call.is_error ? mcp_result.error_message : "[no output]")
+                                   : call.result_text},
+            });
+            final_result.tool_calls.push_back(std::move(call));
+        }
     }
 
-    r = (req.provider == API_PROVIDER::Anthropic)
-            ? parse_anthropic_response(body, static_cast<int>(http_code))
-            : parse_openai_response(body, static_cast<int>(http_code));  // also DeepSeek / Mistral / Local
-    r.latency_ms = latency_ms;
-    return r;
+    // Should be unreachable given the max_rounds guard above.
+    final_result.http_status = http_status;
+    final_result.latency_ms  = total_latency;
+    final_result.error       = "tool-call loop exited without resolution";
+    return final_result;
 }
 
 // ===========================================================================

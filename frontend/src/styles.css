@@ -530,3 +530,138 @@ body:has(.drop-overlay) .chat__input textarea.composer {
 }
 .bench-table th { background: var(--panel-2); }
 .bench-table td.text { font-family: var(--mono); white-space: pre-wrap; word-break: break-word; }
+
+/* Local-LLM scan results — a clickable list under the URL field. Alive
+   candidates are green-dotted and selectable; down candidates are dimmed
+   and disabled. Click to populate Local URL + model. */
+.scan-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0.5rem 0 1rem;
+}
+.scan-results__header {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+.scan-results__empty { font-size: 0.85rem; color: var(--muted); }
+.scan-results__row {
+  display: grid;
+  grid-template-columns: 14px 110px minmax(180px, 220px) 1fr;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms, background 120ms;
+}
+.scan-results__row:hover:not(:disabled) {
+  border-color: var(--accent-2);
+  background: rgba(124, 58, 237, 0.06);
+}
+.scan-results__row:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.scan-results__row .scan-results__dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--error);
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
+}
+.scan-results__row.ok .scan-results__dot {
+  background: var(--success);
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.45);
+}
+.scan-results__rt {
+  font-weight: 600;
+  color: var(--accent-2);
+  text-transform: lowercase;
+}
+.scan-results__url   { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); }
+.scan-results__status {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scan-results__row.down .scan-results__status { color: var(--muted); }
+
+/* MCP tool calls — collapsible block above the answer in assistant
+   bubbles. Nested <details> for args / result keeps the chrome compact. */
+.chat__msg .tool-calls {
+  margin: 0 0 0.55rem 0;
+  padding: 0.3rem 0.55rem;
+  background: rgba(124, 58, 237, 0.06);
+  border-left: 2px solid var(--accent-2);
+  border-radius: 4px;
+  font-size: 0.82rem;
+  color: var(--text);
+}
+.chat__msg .tool-calls > summary {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+  list-style: none;
+  color: var(--accent-2);
+}
+.chat__msg .tool-calls > summary::-webkit-details-marker { display: none; }
+.chat__msg .tool-calls__hint {
+  opacity: 0.55;
+  font-weight: 400;
+  margin-left: 0.4rem;
+  font-size: 0.75rem;
+}
+.chat__msg .tool-calls__body { margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.45rem; }
+.tool-call {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: 4px;
+  padding: 0.35rem 0.55rem;
+}
+.tool-call--err { border-color: var(--error); }
+.tool-call__head {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+.tool-call__name    { color: var(--accent-2); font-weight: 600; }
+.tool-call__latency { color: var(--muted); font-size: 0.72rem; }
+.tool-call__badge {
+  color: var(--error);
+  border: 1px solid var(--error);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.tool-call details {
+  margin-top: 0.3rem;
+  font-size: 0.78rem;
+}
+.tool-call details summary {
+  cursor: pointer;
+  user-select: none;
+  color: var(--muted);
+  list-style: none;
+}
+.tool-call details summary::-webkit-details-marker { display: none; }
+.tool-call details[open] summary { margin-bottom: 0.2rem; color: var(--text); }
+.tool-call details pre {
+  max-height: 14rem;
+  overflow: auto;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
