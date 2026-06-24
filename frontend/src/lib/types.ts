@@ -3,8 +3,8 @@
 export type Mode = 'general' | 'coding' | 'behavioral' | 'system_design';
 export const MODES: Mode[] = ['general', 'coding', 'behavioral', 'system_design'];
 
-export type ProviderId = 'openai' | 'anthropic' | 'deepseek' | 'mistral';
-export const PROVIDER_IDS: ProviderId[] = ['openai', 'anthropic', 'deepseek', 'mistral'];
+export type ProviderId = 'openai' | 'anthropic' | 'deepseek' | 'mistral' | 'local';
+export const PROVIDER_IDS: ProviderId[] = ['openai', 'anthropic', 'deepseek', 'mistral', 'local'];
 
 export interface ModelInfo {
   id: string;
@@ -76,6 +76,7 @@ export const EMPTY_API_KEYS: ApiKeyBag = {
   anthropic: '',
   deepseek:  '',
   mistral:   '',
+  local:     '',
 };
 
 export interface AppSettings {
@@ -103,6 +104,14 @@ export interface AppSettings {
    * Otherwise BYOK (api_keys) is required for paid providers.
    */
   owner_token: string;
+  /**
+   * Endpoint URL for the Local OpenAI-compatible provider (llama.cpp,
+   * Ollama, vLLM, LM Studio, ...). Plain URL, NOT a secret — kept out of
+   * the api_keys bag on purpose. When empty, the backend falls back to the
+   * LOCAL_LLM_URL env var, then a compiled-in default of
+   * http://localhost:8080/v1/chat/completions (llama.cpp's port).
+   */
+  local_url: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -123,6 +132,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   stream_replies: true,
   api_keys: { ...EMPTY_API_KEYS },
   owner_token: '',
+  local_url: '',
 };
 
 export interface ChatRequestBody {
@@ -137,6 +147,8 @@ export interface ChatRequestBody {
   max_tokens: number;
   /** Optional client-supplied key — wins over server env var if set. */
   api_key?: string;
+  /** Override for the Local provider URL (ignored for cloud providers). */
+  local_url?: string;
 }
 
 export interface ChatResponseBody {

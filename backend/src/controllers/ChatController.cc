@@ -25,6 +25,9 @@ std::string api_key_for(hyni::API_PROVIDER p) {
     case hyni::API_PROVIDER::Anthropic: return getenv_str("ANTHROPIC_API_KEY");
     case hyni::API_PROVIDER::DeepSeek:  return getenv_str("DEEPSEEK_API_KEY");
     case hyni::API_PROVIDER::Mistral:   return getenv_str("MISTRAL_API_KEY");
+    // Local is auth-less by default; LOCAL_LLM_API_KEY is only needed if the
+    // user fronts their llama.cpp / vLLM with an auth proxy.
+    case hyni::API_PROVIDER::Local:     return getenv_str("LOCAL_LLM_API_KEY");
     default:                             return "";
     }
 }
@@ -73,6 +76,12 @@ struct key_choice {
 key_choice resolve_api_key(const hyni::chat_request& cr,
                            const drogon::HttpRequestPtr& req) {
     if (!cr.client_api_key.empty()) return {cr.client_api_key, "client"};
+    // Local provider works without an API key (auth-less by default). Treat
+    // it as 'server' so the request flows; if LOCAL_LLM_API_KEY is set we
+    // pick that up too.
+    if (cr.provider == hyni::API_PROVIDER::Local) {
+        return {api_key_for(cr.provider), "server"};   // may be ""
+    }
     if (is_owner(req)) {
         const std::string server_key = api_key_for(cr.provider);
         if (!server_key.empty()) return {server_key, "server"};
@@ -190,6 +199,7 @@ bool parse_chat_request(const std::string& body,
     out.temperature  = get_double(root, "temperature", 0.7);
     out.max_tokens   = get_int(root,    "max_tokens", 4096);
     out.client_api_key = get_str(root, "api_key");
+    out.local_url      = get_str(root, "local_url");
 
     simdjson::ondemand::value profile_val;
     if (root["profile"].get(profile_val) == simdjson::SUCCESS) {
@@ -239,6 +249,7 @@ void ChatController::getConfig(const drogon::HttpRequestPtr& req,
     add(hyni::API_PROVIDER::Anthropic);
     add(hyni::API_PROVIDER::DeepSeek);
     add(hyni::API_PROVIDER::Mistral);
+    add(hyni::API_PROVIDER::Local);
 
     body["modes"]              = {"general", "coding", "behavioral"};
     body["owner_mode_enabled"] = owner_mode;
@@ -265,7 +276,10 @@ void ChatController::postChat(const drogon::HttpRequestPtr& req,
     }
 
     const auto key_pick = resolve_api_key(cr, req);
-    if (key_pick.key.empty()) {
+    // Local provider is auth-less by default — an empty key is fine.
+    // Owner-mode lockdown does NOT gate Local either, since the upstream
+    // server is on localhost and costs nothing.
+    if (key_pick.key.empty() && cr.provider != hyni::API_PROVIDER::Local) {
         const std::string msg = owner_mode_enabled()
             ? "This deployment requires you to supply your own API key. Open "
               "Settings, add a key for '" + hyni::provider_to_str(cr.provider) +
@@ -316,7 +330,7 @@ void ChatController::postChatStream(const drogon::HttpRequestPtr& req,
     }
 
     const auto key_pick = resolve_api_key(cr, req);
-    if (key_pick.key.empty()) {
+    if (key_pick.key.empty() && cr.provider != hyni::API_PROVIDER::Local) {
         const std::string msg = owner_mode_enabled()
             ? "This deployment requires you to supply your own API key in Settings."
             : "No API key configured for provider " + hyni::provider_to_str(cr.provider);

@@ -145,7 +145,7 @@ export async function postChatStream(
  * Sends a 1-token request to verify the (provider, key) combination works.
  */
 export async function probeProviderKey(
-  provider: 'openai' | 'anthropic' | 'deepseek' | 'mistral',
+  provider: 'openai' | 'anthropic' | 'deepseek' | 'mistral' | 'local',
   apiKey: string,
 ): Promise<ChatResponseBody> {
   return postChat({

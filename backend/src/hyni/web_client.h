@@ -27,6 +27,13 @@ struct chat_request {
      * server.
      */
     std::string client_api_key;
+    /**
+     * Optional override for the Local provider URL. Lets the user point
+     * hyni at their llama.cpp / Ollama / vLLM / LM Studio endpoint without
+     * a server restart. Ignored for any provider other than Local.
+     * Must include the full path (e.g. http://localhost:8080/v1/chat/completions).
+     */
+    std::string local_url;
 };
 
 struct chat_result {

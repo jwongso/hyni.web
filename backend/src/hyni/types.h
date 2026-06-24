@@ -20,6 +20,13 @@ enum class API_PROVIDER {
     Anthropic,
     DeepSeek,
     Mistral,
+    /**
+     * Generic OpenAI-compatible local endpoint (llama.cpp server, vLLM,
+     * Ollama with /v1/chat/completions, LM Studio, etc.). URL is configured
+     * via the LOCAL_LLM_URL env var on the server; the model slug is whatever
+     * the local server reports. No API key required by default.
+     */
+    Local,
     Unknown
 };
 
@@ -36,6 +43,7 @@ inline std::string provider_to_str(API_PROVIDER p) {
     case API_PROVIDER::Anthropic: return "anthropic";
     case API_PROVIDER::DeepSeek:  return "deepseek";
     case API_PROVIDER::Mistral:   return "mistral";
+    case API_PROVIDER::Local:     return "local";
     default:                       return "unknown";
     }
 }
@@ -45,6 +53,7 @@ inline API_PROVIDER provider_from_str(const std::string& s) {
     if (s == "anthropic") return API_PROVIDER::Anthropic;
     if (s == "deepseek")  return API_PROVIDER::DeepSeek;
     if (s == "mistral")   return API_PROVIDER::Mistral;
+    if (s == "local")     return API_PROVIDER::Local;
     return API_PROVIDER::Unknown;
 }
 

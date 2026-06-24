@@ -16,10 +16,21 @@ constexpr const char ANTHROPIC_URL[] = "https://api.anthropic.com/v1/messages";
 constexpr const char DEEPSEEK_URL[]  = "https://api.deepseek.com/v1/chat/completions";
 constexpr const char MISTRAL_URL[]   = "https://api.mistral.ai/v1/chat/completions";
 
+// Default URL for the Local OpenAI-compatible provider. Override at runtime
+// with `LOCAL_LLM_URL=http://localhost:8080/v1/chat/completions` (the value
+// llama.cpp's `./server` binds to). Pick any of the OpenAI-compatible
+// runtimes: llama.cpp, vLLM, Ollama (with the /v1 OpenAI shim enabled),
+// LM Studio, text-generation-webui's openai extension, etc.
+//
+// Default points at the standard llama.cpp server port (8080); change in
+// .env if yours lives elsewhere.
+constexpr const char DEFAULT_LOCAL_URL[] = "http://localhost:8080/v1/chat/completions";
+
 constexpr const char DEFAULT_OPENAI_MODEL[]    = "gpt-4o";
 constexpr const char DEFAULT_ANTHROPIC_MODEL[] = "claude-sonnet-4-5-20250929";
 constexpr const char DEFAULT_DEEPSEEK_MODEL[]  = "deepseek-chat";
 constexpr const char DEFAULT_MISTRAL_MODEL[]   = "mistral-large-latest";
+constexpr const char DEFAULT_LOCAL_MODEL[]     = "Qwen_Qwen3-8B-Q5_K_M.gguf";
 
 // Curated, hand-tuned per-provider model catalogues exposed via /api/config
 // so the frontend can render a real dropdown instead of a free-text input
@@ -66,6 +77,15 @@ constexpr model_meta MISTRAL_MODELS[] = {
     {"mistral-small-latest",   "Mistral Small",                 false},
 };
 
+// Local entry — defaults to llama.cpp's `./server` model. Users with a
+// different setup either pick the placeholder 'local' or surface their
+// own slug by editing this list. llama.cpp's /v1/chat/completions ignores
+// the model field anyway, so any non-empty value works.
+constexpr model_meta LOCAL_MODELS[] = {
+    {"Qwen_Qwen3-8B-Q5_K_M.gguf", "Qwen3-8B (your local llama.cpp)", false},
+    {"local",                      "Local (any other OpenAI-compatible)", false},
+};
+
 size_t curl_write(void* contents, size_t size, size_t nmemb, std::string* out) {
     if (!out) return 0;
     size_t n = size * nmemb;
@@ -101,7 +121,13 @@ bool provider_supports_images(API_PROVIDER p) {
     // their vision-tier model. Drop images server-side so requests don't
     // 400 — callers can keep a single payload shape regardless of
     // which provider they pick.
-    return p != API_PROVIDER::DeepSeek;
+    if (p == API_PROVIDER::DeepSeek) return false;
+    // Local (llama.cpp / Ollama / etc.) — most text-only GGUF models do not
+    // understand image_url blocks. Vision-LLM serves through llama.cpp do
+    // exist (LLaVA, MiniCPM, etc.) but they use non-standard wire formats,
+    // not OpenAI-style image_url. Safer default: text-only.
+    if (p == API_PROVIDER::Local)    return false;
+    return true;
 }
 
 nlohmann::json build_openai_messages(const chat_request& req) {
@@ -206,6 +232,7 @@ std::string default_model(API_PROVIDER provider) {
     case API_PROVIDER::Anthropic: return DEFAULT_ANTHROPIC_MODEL;
     case API_PROVIDER::DeepSeek:  return DEFAULT_DEEPSEEK_MODEL;
     case API_PROVIDER::Mistral:   return DEFAULT_MISTRAL_MODEL;
+    case API_PROVIDER::Local:     return DEFAULT_LOCAL_MODEL;
     default:                       return "";
     }
 }
@@ -224,8 +251,23 @@ std::vector<model_info> list_models(API_PROVIDER provider) {
     case API_PROVIDER::Anthropic: return materialize(ANTHROPIC_MODELS);
     case API_PROVIDER::DeepSeek:  return materialize(DEEPSEEK_MODELS);
     case API_PROVIDER::Mistral:   return materialize(MISTRAL_MODELS);
+    case API_PROVIDER::Local:     return materialize(LOCAL_MODELS);
     default:                       return {};
     }
+}
+
+// Pull the Local provider URL from (in order of precedence):
+//   1. per-request override (chat_request.local_url) — what the Settings UI
+//      Local-URL field sends
+//   2. LOCAL_LLM_URL env var
+//   3. compiled-in default (llama.cpp's :8080)
+static std::string resolve_local_url(const chat_request& req) {
+    if (!req.local_url.empty()) return req.local_url;
+    if (const char* v = std::getenv("LOCAL_LLM_URL")) {
+        const std::string s(v);
+        if (!s.empty()) return s;
+    }
+    return DEFAULT_LOCAL_URL;
 }
 
 nlohmann::json build_payload(const chat_request& req) {
@@ -235,8 +277,9 @@ nlohmann::json build_payload(const chat_request& req) {
     switch (req.provider) {
     case API_PROVIDER::OpenAI:
     case API_PROVIDER::DeepSeek:
-    case API_PROVIDER::Mistral: {
-        // All three speak the OpenAI Chat Completions wire format.
+    case API_PROVIDER::Mistral:
+    case API_PROVIDER::Local: {
+        // All four speak the OpenAI Chat Completions wire format.
         payload["model"]    = model;
         payload["messages"] = build_openai_messages(req);
         if (model_supports_temperature(req.provider, model)) {
@@ -314,25 +357,43 @@ static chat_result parse_openai_response(const std::string& body, int http_statu
         if (choice["message"].get(message) != simdjson::SUCCESS) continue;
 
         simdjson::ondemand::value content_val;
-        if (message["content"].get(content_val) != simdjson::SUCCESS) continue;
-
-        if (content_val.type() == simdjson::ondemand::json_type::string) {
-            std::string_view s;
-            if (content_val.get(s) == simdjson::SUCCESS) r.content.append(s);
-        } else if (content_val.type() == simdjson::ondemand::json_type::array) {
-            for (auto part : content_val.get_array()) {
-                std::string_view type_sv;
-                if (part["type"].get(type_sv) != simdjson::SUCCESS) continue;
-                if (type_sv != "text" && type_sv != "output_text") continue;
-                std::string_view t;
-                if (part["text"].get(t) == simdjson::SUCCESS) r.content.append(t);
+        if (message["content"].get(content_val) == simdjson::SUCCESS) {
+            if (content_val.type() == simdjson::ondemand::json_type::string) {
+                std::string_view s;
+                if (content_val.get(s) == simdjson::SUCCESS) r.content.append(s);
+            } else if (content_val.type() == simdjson::ondemand::json_type::array) {
+                for (auto part : content_val.get_array()) {
+                    std::string_view type_sv;
+                    if (part["type"].get(type_sv) != simdjson::SUCCESS) continue;
+                    if (type_sv != "text" && type_sv != "output_text") continue;
+                    std::string_view t;
+                    if (part["text"].get(t) == simdjson::SUCCESS) r.content.append(t);
+                }
             }
         }
+
+        // Reasoning-model fallback: Qwen3 / DeepSeek-R1 / GPT-5 family put
+        // their visible answer in `reasoning_content` (or `reasoning`) and
+        // leave `content` empty when the response was cut off by max_tokens
+        // mid-thought. Surface that instead of "empty content".
+        if (r.content.empty()) {
+            std::string_view rc;
+            if (message["reasoning_content"].get(rc) == simdjson::SUCCESS && !rc.empty()) {
+                r.content.append(rc);
+            } else if (message["reasoning"].get(rc) == simdjson::SUCCESS && !rc.empty()) {
+                r.content.append(rc);
+            }
+        }
+
         break;  // first choice only — matches existing behaviour
     }
 
     r.success = !r.content.empty();
-    if (!r.success && r.error.empty()) r.error = "OpenAI response has empty content";
+    if (!r.success && r.error.empty()) {
+        r.error = "Response was empty. If using a reasoning model "
+                  "(Qwen3 / DeepSeek-R1 / GPT-5), try a larger max_tokens "
+                  "so the model has room to finish thinking AND answer.";
+    }
     return r;
 }
 
@@ -386,16 +447,19 @@ static chat_result parse_anthropic_response(const std::string& body, int http_st
 
 chat_result send_chat(const chat_request& req, const std::string& api_key) {
     chat_result r;
-    if (api_key.empty()) {
+    // Local provider (llama.cpp / vLLM / Ollama / LM Studio) is auth-less
+    // by default; only enforce a key for the cloud providers.
+    if (api_key.empty() && req.provider != API_PROVIDER::Local) {
         r.error = "Missing API key for provider " + provider_to_str(req.provider);
         return r;
     }
 
     const std::string url =
-        (req.provider == API_PROVIDER::Anthropic) ? ANTHROPIC_URL :
-        (req.provider == API_PROVIDER::DeepSeek)  ? DEEPSEEK_URL  :
-        (req.provider == API_PROVIDER::Mistral)   ? MISTRAL_URL   :
-                                                    OPENAI_URL;
+        (req.provider == API_PROVIDER::Anthropic) ? std::string(ANTHROPIC_URL) :
+        (req.provider == API_PROVIDER::DeepSeek)  ? std::string(DEEPSEEK_URL)  :
+        (req.provider == API_PROVIDER::Mistral)   ? std::string(MISTRAL_URL)   :
+        (req.provider == API_PROVIDER::Local)     ? resolve_local_url(req)     :
+                                                    std::string(OPENAI_URL);
 
     nlohmann::json payload;
     try { payload = build_payload(req); }
@@ -412,7 +476,10 @@ chat_result send_chat(const chat_request& req, const std::string& api_key) {
         headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
         const std::string h = "x-api-key: " + api_key;
         headers = curl_slist_append(headers, h.c_str());
-    } else {
+    } else if (!api_key.empty()) {
+        // OpenAI / DeepSeek / Mistral always require Bearer auth.
+        // Local: only attach if the user explicitly set a key (e.g. they
+        // front llama.cpp with an auth proxy).
         const std::string h = "Authorization: Bearer " + api_key;
         headers = curl_slist_append(headers, h.c_str());
     }
@@ -451,7 +518,7 @@ chat_result send_chat(const chat_request& req, const std::string& api_key) {
 
     r = (req.provider == API_PROVIDER::Anthropic)
             ? parse_anthropic_response(body, static_cast<int>(http_code))
-            : parse_openai_response(body, static_cast<int>(http_code));  // also DeepSeek / Mistral
+            : parse_openai_response(body, static_cast<int>(http_code));  // also DeepSeek / Mistral / Local
     r.latency_ms = latency_ms;
     return r;
 }
@@ -539,8 +606,23 @@ bool apply_openai_frame(stream_ctx& ctx, std::string_view payload) {
     for (auto choice : choices) {
         simdjson::ondemand::value delta;
         if (choice["delta"].get(delta) != simdjson::SUCCESS) continue;
+
+        // Try the standard `content` field first; fall back to
+        // `reasoning_content` / `reasoning` for reasoning models (Qwen3 /
+        // DeepSeek-R1 / GPT-5). Order matters per chunk: a model may emit
+        // a reasoning chunk then a content chunk; we surface whichever is
+        // present without prefix.
         std::string_view content;
-        if (delta["content"].get(content) != simdjson::SUCCESS || content.empty()) continue;
+        bool has_text = false;
+        if (delta["content"].get(content) == simdjson::SUCCESS && !content.empty()) {
+            has_text = true;
+        } else if (delta["reasoning_content"].get(content) == simdjson::SUCCESS && !content.empty()) {
+            has_text = true;
+        } else if (delta["reasoning"].get(content) == simdjson::SUCCESS && !content.empty()) {
+            has_text = true;
+        }
+        if (!has_text) continue;
+
         ctx.full_content.append(content);
         if (ctx.on_delta && !(*ctx.on_delta)(content)) {
             ctx.cancelled = true;
@@ -671,17 +753,18 @@ void send_chat_stream(const chat_request& req,
                       const stream_delta_cb& on_delta,
                       const stream_done_cb& on_done) {
     chat_result r;
-    if (api_key.empty()) {
+    if (api_key.empty() && req.provider != API_PROVIDER::Local) {
         r.error = "Missing API key for provider " + provider_to_str(req.provider);
         on_done(r);
         return;
     }
 
     const std::string url =
-        (req.provider == API_PROVIDER::Anthropic) ? ANTHROPIC_URL :
-        (req.provider == API_PROVIDER::DeepSeek)  ? DEEPSEEK_URL  :
-        (req.provider == API_PROVIDER::Mistral)   ? MISTRAL_URL   :
-                                                    OPENAI_URL;
+        (req.provider == API_PROVIDER::Anthropic) ? std::string(ANTHROPIC_URL) :
+        (req.provider == API_PROVIDER::DeepSeek)  ? std::string(DEEPSEEK_URL)  :
+        (req.provider == API_PROVIDER::Mistral)   ? std::string(MISTRAL_URL)   :
+        (req.provider == API_PROVIDER::Local)     ? resolve_local_url(req)     :
+                                                    std::string(OPENAI_URL);
 
     nlohmann::json payload;
     try {
@@ -701,7 +784,7 @@ void send_chat_stream(const chat_request& req,
         headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
         const std::string h = "x-api-key: " + api_key;
         headers = curl_slist_append(headers, h.c_str());
-    } else {
+    } else if (!api_key.empty()) {
         const std::string h = "Authorization: Bearer " + api_key;
         headers = curl_slist_append(headers, h.c_str());
     }

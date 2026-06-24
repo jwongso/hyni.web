@@ -292,7 +292,11 @@ export function SettingsPage() {
         profile can read them. Use revocable, spend-limited keys. Click <em>Clear</em>
         before lending the device.
       </div>
-      {PROVIDER_IDS.map((p) => {
+      {PROVIDER_IDS
+        // Local is auth-less by default — its endpoint URL lives in its own
+        // section below, not in the keys bag.
+        .filter((p) => p !== 'local')
+        .map((p) => {
         const placeholder = p === 'openai'    ? 'sk-…'
                           : p === 'anthropic' ? 'sk-ant-…'
                           : p === 'deepseek'  ? 'sk-…'
@@ -329,6 +333,29 @@ export function SettingsPage() {
         <button className="danger" type="button" onClick={clearAllKeys}>Clear all keys</button>
         <small style={{ color: 'var(--muted)' }}>
           When a key is set here, the chat uses it instead of the server's env var.
+        </small>
+      </div>
+
+      {/* ===== Local LLM endpoint =================================== */}
+      <h2>Local LLM endpoint <small style={{ color: 'var(--muted)' }}>(llama.cpp / Ollama / vLLM / LM Studio)</small></h2>
+      <div className="field">
+        <label>OpenAI-compatible URL</label>
+        <input
+          type="url"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="http://localhost:8080/v1/chat/completions"
+          value={settings.local_url}
+          onChange={(e) => settingsChange('local_url', e.target.value)}
+          style={{ fontFamily: 'var(--mono)' }}
+        />
+        <small>
+          Leave blank to use the server's <code>LOCAL_LLM_URL</code> env var
+          (default <code>http://localhost:8080/v1/chat/completions</code>).
+          Must include the full path. Examples:&nbsp;
+          <code>localhost:8080</code> = llama.cpp,&nbsp;
+          <code>localhost:11434</code> = Ollama,&nbsp;
+          <code>localhost:1234</code> = LM Studio.
         </small>
       </div>
 

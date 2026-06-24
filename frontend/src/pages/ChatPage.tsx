@@ -166,6 +166,9 @@ export function ChatPage() {
       // Per-provider local key (BYOK). When empty, backend falls back to
       // its own env var IF the request bearer matches HYNI_OWNER_TOKEN.
       api_key:     settings.api_keys[settings.provider] || undefined,
+      // Per-request override for the Local provider endpoint (ignored by
+      // the backend for any other provider).
+      local_url:   settings.local_url || undefined,
     };
 
     const rollback = (reason: string) => {
