@@ -193,7 +193,10 @@ export function ChatPage() {
           if (!final.success) {
             rollback(final.error || `LLM error (HTTP ${final.http_status})`);
           } else {
-            const asst: ChatMessage = { role: 'assistant', text: assembled, at: Date.now() };
+            const asst: ChatMessage = {
+              role: 'assistant', text: assembled, at: Date.now(),
+              provider: settings.provider, model: settings.model,
+            };
             setHistory([...nextHistory, asst]);
             if (settings.speak_replies) {
               void tts.speak(assembled, {
@@ -223,7 +226,10 @@ export function ChatPage() {
       if (!reply.success) {
         rollback(reply.error || `LLM error (HTTP ${reply.http_status})`);
       } else {
-        const asst: ChatMessage = { role: 'assistant', text: reply.content, at: Date.now() };
+        const asst: ChatMessage = {
+          role: 'assistant', text: reply.content, at: Date.now(),
+          provider: settings.provider, model: settings.model,
+        };
         setHistory([...nextHistory, asst]);
         if (settings.speak_replies) {
           void tts.speak(reply.content, {
@@ -271,10 +277,13 @@ export function ChatPage() {
   useEffect(() => () => tts.cancel(), []);
 
   const provider     = config?.providers.find((p) => p.id === settings.provider);
+  const isLocal      = settings.provider === 'local';
   const hasServerKey = provider?.has_key ?? false;
   const hasOwnKey    = !!settings.api_keys[settings.provider];
-  const canCall      = hasServerKey || hasOwnKey;
-  const keyLabel     = hasOwnKey ? 'your key'
+  // Local provider is auth-less — no key annotation makes sense.
+  const canCall      = isLocal || hasServerKey || hasOwnKey;
+  const keyLabel     = isLocal ? ''
+                    : hasOwnKey ? 'your key'
                     : hasServerKey ? 'server key'
                     : 'no key';
   const displayedBuffer = useMemo(() => {
@@ -300,7 +309,7 @@ export function ChatPage() {
         </span>
         <span className="status-pill" title="Change in Settings">TTS: {settings.tts_engine}</span>
         <span className={'status-pill ' + (canCall ? 'ok' : 'warn')}>
-          {settings.provider}: {keyLabel}
+          {settings.provider}{keyLabel ? `: ${keyLabel}` : ''}
         </span>
         <span style={{ flex: 1 }} />
         {stt.isRunning
@@ -314,6 +323,8 @@ export function ChatPage() {
           messages={history}
           streamingText={streamingText}
           pendingAssistant={sending}
+          currentProvider={settings.provider}
+          currentModel={settings.model}
         />
         {(error || stt.error) && (
           <div className="chat__msg system" style={{ color: 'var(--error)' }}>

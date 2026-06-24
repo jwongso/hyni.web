@@ -48,6 +48,9 @@ export interface ChatMessage {
   images?: ImageData[];
   /** Epoch-ms creation time. Used by the per-message auspice dot. */
   at?: number;
+  /** Provider+model that produced this assistant message (shown in the bubble header). */
+  model?: string;
+  provider?: string;
 }
 
 export interface UserProfile {

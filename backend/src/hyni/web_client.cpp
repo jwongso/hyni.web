@@ -609,18 +609,33 @@ bool apply_openai_frame(stream_ctx& ctx, std::string_view payload) {
 
         // Try the standard `content` field first; fall back to
         // `reasoning_content` / `reasoning` for reasoning models (Qwen3 /
-        // DeepSeek-R1 / GPT-5). Order matters per chunk: a model may emit
-        // a reasoning chunk then a content chunk; we surface whichever is
-        // present without prefix.
+        // DeepSeek-R1 / GPT-5).
+        //
+        // IMPORTANT: llama.cpp's first chunk for chat completions is
+        //   {"role":"assistant","content":null}
+        // simdjson's ondemand `get<string_view>()` on a `null` value returns
+        // INCORRECT_TYPE *and* leaves the cursor in an indeterminate state,
+        // so any subsequent `delta["reasoning_content"]` lookup on the same
+        // value silently fails. We therefore extract each candidate as a
+        // raw `value`, skip it if null/absent/non-string, and only then try
+        // to consume it.
+        auto extract = [](simdjson::ondemand::value& obj, const char* key,
+                          std::string_view& out) -> bool {
+            simdjson::ondemand::value v;
+            if (obj[key].get(v) != simdjson::SUCCESS) return false;
+            if (v.is_null()) return false;
+            std::string_view sv;
+            if (v.get_string().get(sv) != simdjson::SUCCESS) return false;
+            if (sv.empty()) return false;
+            out = sv;
+            return true;
+        };
+
         std::string_view content;
-        bool has_text = false;
-        if (delta["content"].get(content) == simdjson::SUCCESS && !content.empty()) {
-            has_text = true;
-        } else if (delta["reasoning_content"].get(content) == simdjson::SUCCESS && !content.empty()) {
-            has_text = true;
-        } else if (delta["reasoning"].get(content) == simdjson::SUCCESS && !content.empty()) {
-            has_text = true;
-        }
+        bool has_text =
+            extract(delta, "content",           content) ||
+            extract(delta, "reasoning_content", content) ||
+            extract(delta, "reasoning",         content);
         if (!has_text) continue;
 
         ctx.full_content.append(content);
