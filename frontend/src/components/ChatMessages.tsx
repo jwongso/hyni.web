@@ -1,5 +1,8 @@
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { ChatMessage } from '../lib/types';
 import { DayDot } from './DayDot';
+import { CopyButton } from './CopyButton';
 
 interface Props {
   messages: ChatMessage[];
@@ -24,6 +27,29 @@ function modelLabel(provider?: string, model?: string): string {
   if (provider && m)   return `${provider} · ${m}`;
   if (provider)        return provider;
   return m || 'assistant';
+}
+
+// Renders the assistant reply as GitHub-flavoured Markdown so headings,
+// bold/italic, lists, tables, inline code and fenced code blocks all
+// render naturally. react-markdown sanitises by default (no raw HTML
+// passthrough), so paste-from-LLM content is safe.
+//
+// We open ALL links in a new tab — interview answers often cite blog
+// posts / docs, and we don't want the user to lose their chat history
+// by navigating away.
+function Markdown({ text }: { text: string }) {
+  return (
+    <div className="md">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />,
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
 // Collapsible chain-of-thought disclosure. Default-collapsed so the visible
@@ -62,14 +88,18 @@ export function ChatMessages({
     <>
       {messages.map((m, i) => {
         const label = m.role === 'assistant' ? modelLabel(m.provider, m.model) : m.role;
+        const isAsst = m.role === 'assistant';
         return (
           <div key={i} className={`chat__msg ${m.role}`}>
             <div className="role">
               <span>{label}</span>
               {m.at != null && <DayDot at={m.at} />}
+              {isAsst && m.text && (
+                <CopyButton text={m.text} title="Copy reply" />
+              )}
             </div>
-            {m.role === 'assistant' && m.reasoning ? <ReasoningBlock text={m.reasoning} /> : null}
-            {m.text}
+            {isAsst && m.reasoning ? <ReasoningBlock text={m.reasoning} /> : null}
+            {isAsst ? <Markdown text={m.text} /> : m.text}
             {m.images && m.images.length > 0 && (
               <div className="images">
                 {m.images.map((img, j) => (
@@ -90,9 +120,10 @@ export function ChatMessages({
           <div className="role">
             <span>{liveLabel}</span>
             <span style={{ opacity: 0.6 }}>· streaming…</span>
+            {streamingText && <CopyButton text={streamingText} title="Copy (so far)" />}
           </div>
           {streamingReasoning ? <ReasoningBlock text={streamingReasoning} /> : null}
-          {streamingText}
+          {streamingText ? <Markdown text={streamingText} /> : null}
           {streamingText ? <span className="cursor-blink">▍</span> : null}
         </div>
       ) : null}

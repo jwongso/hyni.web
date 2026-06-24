@@ -278,6 +278,33 @@ textarea { resize: vertical; font-family: var(--mono); }
   align-items: center;
   gap: 0.4rem;
 }
+
+/* Inline copy-to-clipboard button in the assistant bubble header. */
+.copy-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  transition: color 120ms, background 120ms, border-color 120ms;
+}
+.copy-btn:hover {
+  color: var(--text);
+  background: rgba(255,255,255,0.06);
+  border-color: var(--border);
+}
+.copy-btn:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 1px;
+}
+.copy-btn--ok {
+  color: var(--accent-2);
+  border-color: transparent;
+  background: transparent;
+}
 .day-dot {
   display: inline-block;
   line-height: 1;
@@ -298,6 +325,62 @@ textarea { resize: vertical; font-family: var(--mono); }
   overflow-x: auto;
   font-family: var(--mono);
   font-size: 0.85rem;
+}
+
+/* Markdown rendering inside assistant bubbles. We keep things conservative
+   — no fancy headings, lists tight, code blocks reuse the existing
+   .chat__msg pre style above. Paragraphs flow naturally; we collapse the
+   first/last margins so the bubble looks balanced. */
+.chat__msg .md > :first-child { margin-top: 0; }
+.chat__msg .md > :last-child  { margin-bottom: 0; }
+.chat__msg .md p              { margin: 0.4rem 0; line-height: 1.5; }
+.chat__msg .md h1,
+.chat__msg .md h2,
+.chat__msg .md h3,
+.chat__msg .md h4 {
+  margin: 0.6rem 0 0.3rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.chat__msg .md h1 { font-size: 1.15rem; }
+.chat__msg .md h2 { font-size: 1.05rem; }
+.chat__msg .md h3 { font-size: 0.98rem; }
+.chat__msg .md h4 { font-size: 0.92rem; color: var(--muted); }
+.chat__msg .md ul,
+.chat__msg .md ol           { margin: 0.4rem 0; padding-left: 1.25rem; }
+.chat__msg .md li           { margin: 0.15rem 0; }
+.chat__msg .md code {
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 0.86em;
+}
+.chat__msg .md pre code     { background: none; padding: 0; }
+.chat__msg .md blockquote {
+  border-left: 3px solid var(--accent-2);
+  padding-left: 0.7rem;
+  margin: 0.5rem 0;
+  color: var(--muted);
+  font-style: italic;
+}
+.chat__msg .md a            { color: var(--accent-2); text-decoration: underline; }
+.chat__msg .md table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 0.88em;
+}
+.chat__msg .md th,
+.chat__msg .md td {
+  border: 1px solid var(--border);
+  padding: 0.25rem 0.55rem;
+  text-align: left;
+}
+.chat__msg .md th           { background: rgba(255,255,255,0.04); }
+.chat__msg .md hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 0.7rem 0;
 }
 
 .cursor-blink {
