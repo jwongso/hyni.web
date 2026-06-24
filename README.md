@@ -348,6 +348,25 @@ npm run dev         # http://localhost:5173 — proxies /api -> :8848
 The Vite dev server sends the same COOP/COEP headers as Drogon so the wstream
 WASM adapter works in development too.
 
+### Frontend smoke tests (Playwright)
+
+End-to-end smoke tests live in `frontend/e2e/`. They drive a real Chromium
+against the built bundle served by the running Drogon backend, mocking the
+LLM at the network layer where needed. Catches: storage-shape regressions,
+SSE consumer breakage, payload-from-textarea regressions, provider dropdown
+content, owner-mode visibility.
+
+```bash
+cd frontend
+npm run e2e                           # headless
+npm run e2e:headed                    # see Chromium
+HYNI_E2E_OWNER_TOKEN=... npm run e2e  # also runs the live chat round-trip
+```
+
+The backend must be running at `http://localhost:8848` (e.g. via the
+`systemd --user` unit). Set `HYNI_E2E_BASE_URL=...` to point at a
+different host.
+
 ### Public hostname via Cloudflare Tunnel
 
 See [`cloudflared/README.md`](cloudflared/README.md). Add this single ingress
