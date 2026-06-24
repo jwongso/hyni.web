@@ -164,18 +164,25 @@ textarea { resize: vertical; font-family: var(--mono); }
 .fengshui__footer a { color: var(--accent-2); }
 .app__main {
   flex: 1 1 auto;
-  overflow: hidden;
+  /* The page scrollbar lives HERE so it sits flush with the viewport's
+     right edge, not on the inner content column's right edge (which
+     would float in mid-air on wide screens because .page is centered
+     with a max-width). Children should NOT add their own overflow:auto
+     for the main scroll. */
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
 }
 
-/* Generic page card layout. */
+/* Generic page card layout. Scrolling is handled by the parent
+   .app__main so the scrollbar sits at the viewport edge instead of
+   floating next to this centered, max-width content column. */
 .page {
   padding: 1rem 1.5rem 2rem;
   max-width: 1100px;
   margin: 0 auto;
   width: 100%;
-  overflow-y: auto;
 }
 .page h1 { margin: 0.25rem 0 0.75rem; font-size: 1.4rem; color: var(--accent-2); }
 .page h2 { margin: 1.25rem 0 0.5rem; font-size: 1.05rem; }
