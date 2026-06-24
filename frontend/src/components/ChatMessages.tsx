@@ -1,8 +1,10 @@
+import { isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatMessage } from '../lib/types';
 import { DayDot } from './DayDot';
 import { CopyButton } from './CopyButton';
+import { MermaidBlock } from './MermaidBlock';
 
 interface Props {
   messages: ChatMessage[];
@@ -46,6 +48,30 @@ function Markdown({ text }: { text: string }) {
         remarkPlugins={[remarkGfm]}
         components={{
           a: ({ ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />,
+          // Intercept <pre> so fenced ```mermaid blocks render as a
+          // proper diagram. react-markdown wraps every fenced block in
+          // <pre><code class="language-X">…</code></pre>; for mermaid
+          // we replace that whole subtree with our lazy MermaidBlock.
+          // All other languages keep the default <pre><code> chrome
+          // (and the existing CSS in .chat__msg pre + .md code).
+          pre: ({ children, ...props }) => {
+            const child: any = Array.isArray(children)
+              ? children[0]
+              : children;
+            if (isValidElement(child)) {
+              const ch: any = child;
+              const cls: string = ch.props?.className ?? '';
+              if (cls.split(/\s+/).includes('language-mermaid')) {
+                const code = typeof ch.props?.children === 'string'
+                  ? ch.props.children
+                  : Array.isArray(ch.props?.children)
+                    ? ch.props.children.join('')
+                    : '';
+                return <MermaidBlock code={code} />;
+              }
+            }
+            return <pre {...props}>{children}</pre>;
+          },
         }}
       >
         {text}

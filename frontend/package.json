@@ -13,6 +13,7 @@
     "e2e:headed": "playwright test --headed"
   },
   "dependencies": {
+    "mermaid": "^11.15.0",
     "pdfjs-dist": "^6.0.227",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

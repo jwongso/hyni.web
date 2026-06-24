@@ -665,3 +665,56 @@ body:has(.drop-overlay) .chat__input textarea.composer {
   font-size: 0.75rem;
   line-height: 1.4;
 }
+
+/* Mermaid diagrams (lazy-loaded). The SVG is sized to fill the bubble
+   width; long diagrams scroll horizontally rather than blow the layout.
+   A small <details> below the SVG lets users peek at the source. */
+.chat__msg .mermaid-block {
+  margin: 0.6rem 0;
+  padding: 0.5rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.chat__msg .mermaid-block__svg {
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+}
+.chat__msg .mermaid-block__svg svg { max-width: 100%; height: auto; }
+.chat__msg .mermaid-block__src {
+  margin-top: 0.4rem;
+  font-size: 0.78rem;
+}
+.chat__msg .mermaid-block__src summary {
+  cursor: pointer;
+  color: var(--muted);
+  list-style: none;
+  user-select: none;
+}
+.chat__msg .mermaid-block__src summary::-webkit-details-marker { display: none; }
+.chat__msg .mermaid-block__src pre {
+  margin-top: 0.3rem;
+  background: var(--code-bg);
+  padding: 0.5rem;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+/* Fallback (mid-stream or parse error) — render as a plain code block
+   plus a tiny error note if mermaid reported a real problem. */
+.chat__msg .mermaid-block__fallback {
+  background: var(--code-bg);
+  padding: 0.6rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+.chat__msg .mermaid-block__fallback--err { border: 1px dashed var(--error); }
+.chat__msg .mermaid-block__err {
+  margin-top: 0.4rem;
+  color: var(--error);
+  font-size: 0.78rem;
+}
