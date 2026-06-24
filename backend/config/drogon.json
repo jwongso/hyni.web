@@ -1,0 +1,49 @@
+{
+  "//": "Drogon runtime config for hyni.web. Generated to be edited.",
+  "ssl": {
+    "cert": "",
+    "key": ""
+  },
+  "listeners": [
+    {
+      "address": "0.0.0.0",
+      "port": 8848,
+      "https": false
+    }
+  ],
+  "app": {
+    "threads_num": 0,
+    "enable_session": false,
+    "document_root": "./public",
+    "upload_path": "uploads",
+    "client_max_body_size": "20M",
+    "client_max_memory_body_size": "8M",
+    "max_connections": 1000,
+    "max_connections_per_ip": 50,
+    "log": {
+      "log_level": "INFO",
+      "use_spdlog": false
+    },
+    "static_files_cache_time": 5,
+    "file_types": [
+      "gif","png","jpg","js","css","html","ico","swf","xap",
+      "apk","cur","xml","svg","woff","woff2","ttf","otf",
+      "mp3","mp4","webm","ogg","json","txt","map",
+      "wasm","mjs","data"
+    ],
+    "mime": {
+      "application/wasm": ["wasm"],
+      "application/javascript": ["mjs"]
+    },
+    "use_implicit_page": true,
+    "implicit_page": "index.html",
+    "use_brotli": false,
+    "use_gzip": true,
+    "static_file_headers": [
+      {"name": "Cache-Control",                  "value": "public, max-age=300"},
+      {"name": "Cross-Origin-Opener-Policy",     "value": "same-origin"},
+      {"name": "Cross-Origin-Embedder-Policy",   "value": "credentialless"},
+      {"name": "Cross-Origin-Resource-Policy",   "value": "cross-origin"}
+    ]
+  }
+}

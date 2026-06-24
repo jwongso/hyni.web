@@ -1,0 +1,15 @@
+# Standalone Cloudflare Tunnel config for hyni.web.
+#
+# Use this only if you want a dedicated tunnel for hyni (Option B in
+# cloudflared/README.md). Otherwise just add the hyni.localrun.ai ingress
+# entry to your existing ~/.cloudflared/config.yml (Option A).
+#
+# Replace <TUNNEL_UUID> with the value returned by `cloudflared tunnel create hyni`.
+
+tunnel: <TUNNEL_UUID>
+credentials-file: /home/wdha/.cloudflared/<TUNNEL_UUID>.json
+
+ingress:
+  - hostname: hyni.localrun.ai
+    service: http://localhost:8848
+  - service: http_status:404

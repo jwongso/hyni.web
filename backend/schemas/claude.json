@@ -1,0 +1,199 @@
+{
+  "provider": {
+    "name": "claude",
+    "display_name": "Anthropic Claude",
+    "version": "1.0"
+  },
+  "api": {
+    "endpoint": "https://api.anthropic.com/v1/messages",
+    "method": "POST",
+    "timeout": 60000,
+    "max_retries": 3
+  },
+  "authentication": {
+    "type": "header",
+    "key_name": "x-api-key",
+    "key_placeholder": "<YOUR_ANTHROPIC_API_KEY>"
+  },
+  "headers": {
+    "required": {
+      "X-API-Key": "<YOUR_ANTHROPIC_API_KEY>",
+      "Anthropic-Version": "2023-06-01",
+      "Content-Type": "application/json"
+    },
+    "optional": {
+      "Anthropic-Beta": ""
+    }
+  },
+  "models": {
+    "available": [
+      "claude-3-5-sonnet-20241022",
+      "claude-3-5-haiku-20241022",
+      "claude-3-opus-20240229",
+      "claude-3-sonnet-20240229",
+      "claude-3-haiku-20240307"
+    ],
+    "default": "claude-3-5-sonnet-20241022"
+  },
+  "request_template": {
+    "model": "claude-3-5-sonnet-20241022",
+    "max_tokens": 1024,
+    "messages": [],
+    "system": null,
+    "temperature": null,
+    "top_p": null,
+    "top_k": null,
+    "stop_sequences": null,
+    "stream": false
+  },
+  "parameters": {
+    "max_tokens": {
+      "type": "integer",
+      "required": true,
+      "min": 1,
+      "max": 8192,
+      "default": 1024
+    },
+    "temperature": {
+      "type": "float",
+      "required": false,
+      "min": 0.0,
+      "max": 1.0,
+      "default": null
+    },
+    "top_p": {
+      "type": "float",
+      "required": false,
+      "min": 0.0,
+      "max": 1.0,
+      "default": null
+    },
+    "top_k": {
+      "type": "integer",
+      "required": false,
+      "min": 1,
+      "default": null
+    },
+    "stop_sequences": {
+      "type": "array",
+      "required": false,
+      "max_items": 4,
+      "default": null
+    },
+    "stream": {
+      "type": "boolean",
+      "required": false,
+      "default": false
+    }
+  },
+  "message_roles": ["user", "assistant"],
+  "system_message": {
+    "supported": true,
+    "field": "system",
+    "type": "string"
+  },
+  "multimodal": {
+    "supported": true,
+    "supported_types": ["text", "image"],
+    "image_formats": ["image/jpeg", "image/png", "image/gif", "image/webp"],
+    "max_image_size": 5242880,
+    "max_images_per_message": 20
+  },
+  "message_format": {
+    "structure": {
+      "role": "<ROLE>",
+      "content": []
+    },
+    "content_types": {
+      "text": {
+        "type": "text",
+        "text": "<TEXT_CONTENT>"
+      },
+      "image": {
+        "type": "image",
+        "source": {
+          "type": "base64",
+          "media_type": "<MEDIA_TYPE>",
+          "data": "<BASE64_DATA>"
+        }
+      }
+    }
+  },
+  "response_format": {
+    "success": {
+      "structure": {
+        "id": "string",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "string"
+          }
+        ],
+        "model": "string",
+        "stop_reason": "string",
+        "stop_sequence": "string|null",
+        "usage": {
+          "input_tokens": "integer",
+          "output_tokens": "integer"
+        }
+      },
+      "content_path": ["content"],
+      "text_path": ["content", 0, "text"],
+      "usage_path": ["usage"],
+      "model_path": ["model"],
+      "stop_reason_path": ["stop_reason"]
+    },
+    "error": {
+      "structure": {
+        "type": "error",
+        "error": {
+          "type": "string",
+          "message": "string"
+        }
+      },
+      "error_path": ["error", "message"],
+      "error_type_path": ["error", "type"]
+    },
+    "stream": {
+      "event_types": ["message_start", "content_block_start", "ping", "content_block_delta", "content_block_stop", "message_delta", "message_stop"],
+      "content_delta_path": ["delta", "text"],
+      "usage_delta_path": ["usage"]
+    }
+  },
+  "limits": {
+    "max_context_length": 200000,
+    "max_output_tokens": 8192,
+    "rate_limits": {
+      "requests_per_minute": 1000,
+      "tokens_per_minute": 40000
+    }
+  },
+  "features": {
+    "streaming": true,
+    "function_calling": false,
+    "json_mode": false,
+    "vision": true,
+    "system_messages": true,
+    "message_history": true
+  },
+  "error_codes": {
+    "400": "invalid_request_error",
+    "401": "authentication_error",
+    "403": "permission_error",
+    "404": "not_found_error",
+    "422": "unprocessable_entity_error",
+    "429": "rate_limit_error",
+    "500": "api_error",
+    "529": "overloaded_error"
+  },
+  "validation": {
+    "required_fields": ["model", "max_tokens", "messages"],
+    "message_validation": {
+      "min_messages": 1,
+      "alternating_roles": false,
+      "last_message_role": "user"
+    }
+  }
+}

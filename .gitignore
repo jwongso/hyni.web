@@ -1,0 +1,52 @@
+# --- C++ / CMake -----------------------------------------------------------
+build/
+build-*/
+out/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.exe
+compile_commands.json
+
+# --- Node / Vite -----------------------------------------------------------
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.turbo/
+.pnpm-store/
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Secrets / env ---------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.local
+
+# --- Editor / OS -----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Cloudflared -----------------------------------------------------------
+cloudflared/*.json
+cloudflared/cert.pem
+
+# --- Generated logs / db ---------------------------------------------------
+*.log
+*.sqlite
+*.sqlite-journal
+
+# --- Frontend production build output (Vite -> ../public/app/) -------------
+public/app/
