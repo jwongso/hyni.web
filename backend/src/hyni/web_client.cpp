@@ -297,6 +297,25 @@ nlohmann::json build_payload(const chat_request& req) {
         payload["max_tokens"] = req.max_tokens;
         payload["temperature"]= req.temperature;
         if (!system.empty()) payload["system"] = system;
+        // Translate OpenAI-shape tools -> Anthropic shape:
+        //   {type:"function", function:{name, description, parameters}}
+        // becomes
+        //   {name, description, input_schema}
+        if (!req.tools.empty()) {
+            nlohmann::json anth_tools = nlohmann::json::array();
+            for (const auto& t : req.tools) {
+                if (!t.is_object()) continue;
+                const auto& fn = t.contains("function") ? t["function"] : t;
+                nlohmann::json out;
+                out["name"]         = fn.value("name", "");
+                out["description"]  = fn.value("description", "");
+                out["input_schema"] = fn.contains("parameters")
+                    ? fn["parameters"]
+                    : nlohmann::json{{"type", "object"}, {"properties", nlohmann::json::object()}};
+                if (!out["name"].get<std::string>().empty()) anth_tools.push_back(std::move(out));
+            }
+            if (!anth_tools.empty()) payload["tools"] = std::move(anth_tools);
+        }
         break;
     }
     default:
@@ -444,46 +463,50 @@ static chat_result parse_anthropic_response(const std::string& body, int http_st
     chat_result r;
     r.http_status = http_status;
 
-    simdjson::padded_string padded(body);
-    simdjson::ondemand::parser parser;
-    simdjson::ondemand::document doc;
-    if (auto err = parser.iterate(padded).get(doc); err) {
-        r.error = std::string("Failed to parse Anthropic response: ") + simdjson::error_message(err);
+    // Anthropic responses are small (no streaming here) — use nlohmann
+    // throughout so we can preserve `content` blocks verbatim for the
+    // tool-call loop's next turn (tool_use blocks must round-trip back
+    // to the API as part of the prior assistant message).
+    nlohmann::json doc;
+    try { doc = nlohmann::json::parse(body); }
+    catch (const std::exception& e) {
+        r.error = std::string("Failed to parse Anthropic response: ") + e.what();
         return r;
     }
 
-    {
-        simdjson::ondemand::value err_val;
-        if (doc["error"].get(err_val) == simdjson::SUCCESS) {
-            std::string_view msg;
-            r.error = (err_val["message"].get(msg) == simdjson::SUCCESS && !msg.empty())
-                        ? std::string(msg)
-                        : "Anthropic returned an error envelope";
-            return r;
+    if (doc.contains("error") && !doc["error"].is_null()) {
+        const auto& e = doc["error"];
+        r.error = e.value("message", "Anthropic returned an error envelope");
+        return r;
+    }
+
+    if (doc.contains("usage") && doc["usage"].is_object()) {
+        r.prompt_tokens     = doc["usage"].value("input_tokens",  0);
+        r.completion_tokens = doc["usage"].value("output_tokens", 0);
+    }
+
+    if (doc.contains("content") && doc["content"].is_array()) {
+        // Preserve the raw content array so the tool-call loop can echo
+        // it back as the prior assistant turn (Anthropic requires the
+        // tool_use blocks to be present in the conversation when sending
+        // the corresponding tool_result).
+        r.raw_anthropic_content = doc["content"];
+
+        for (const auto& block : doc["content"]) {
+            const std::string type = block.value("type", "");
+            if (type == "text") {
+                r.content.append(block.value("text", ""));
+            } else if (type == "tool_use") {
+                tool_call_log log;
+                log.id        = block.value("id", "");
+                log.name      = block.value("name", "");
+                log.arguments = block.contains("input") ? block["input"] : nlohmann::json::object();
+                if (!log.name.empty()) r.tool_calls.push_back(std::move(log));
+            }
         }
     }
 
-    {
-        simdjson::ondemand::value usage;
-        if (doc["usage"].get(usage) == simdjson::SUCCESS) {
-            int64_t v = 0;
-            if (usage["input_tokens"].get(v)  == simdjson::SUCCESS) r.prompt_tokens     = static_cast<int>(v);
-            if (usage["output_tokens"].get(v) == simdjson::SUCCESS) r.completion_tokens = static_cast<int>(v);
-        }
-    }
-
-    simdjson::ondemand::array content_array;
-    if (doc["content"].get_array().get(content_array) == simdjson::SUCCESS) {
-        for (auto block : content_array) {
-            std::string_view type_sv;
-            if (block["type"].get(type_sv) != simdjson::SUCCESS) continue;
-            if (type_sv != "text") continue;
-            std::string_view t;
-            if (block["text"].get(t) == simdjson::SUCCESS) r.content.append(t);
-        }
-    }
-
-    r.success = !r.content.empty();
+    r.success = !r.content.empty() || !r.tool_calls.empty();
     if (!r.success && r.error.empty()) r.error = "Anthropic response has empty content";
     return r;
 }
@@ -560,15 +583,17 @@ chat_result send_chat(const chat_request& req, const std::string& api_key) {
     try { payload = build_payload(req); }
     catch (const std::exception& e) { final_result.error = e.what(); return final_result; }
 
-    // Tools are only injected for OpenAI-compatible providers. Anthropic
-    // uses a different tool format which we'll add in a later pass.
-    const bool tools_enabled =
-        !req.tools.empty() &&
-        req.provider != API_PROVIDER::Anthropic;
-    if (tools_enabled) {
+    // Tools are injected for ALL providers that support tool calls. The
+    // OpenAI-compatible shape (`tools: [{type:"function", function:...}]`,
+    // `tool_choice: "auto"`) goes into payload here. The Anthropic shape
+    // is built inside build_payload() so we just check whether the user
+    // wired any tools at all.
+    if (!req.tools.empty() && req.provider != API_PROVIDER::Anthropic) {
         payload["tools"]       = req.tools;
         payload["tool_choice"] = "auto";
     }
+    // For Anthropic, build_payload() already translated and attached
+    // `tools` in the Anthropic-flavoured shape.
 
     long long total_latency = 0;
     int       http_status   = 0;
@@ -592,25 +617,18 @@ chat_result send_chat(const chat_request& req, const std::string& api_key) {
             ? parse_anthropic_response(out.body, http_status)
             : parse_openai_response  (out.body, http_status);
 
-        // Carry over already-executed tool calls so the caller sees the
-        // full log when the loop finally finishes.
         std::vector<tool_call_log> calls_this_round = std::move(step.tool_calls);
         step.tool_calls.clear();
 
-        // Terminal case 1: no tool calls -> the model produced its final
-        // answer.
+        // Terminal case 1: no tool calls -> the model produced its final answer.
         if (calls_this_round.empty()) {
             step.latency_ms  = total_latency;
             step.tool_calls  = std::move(final_result.tool_calls);
             return step;
         }
 
-        // Terminal case 2: we've hit the round budget — even though the
-        // model wants to keep calling tools, refuse and return what we
-        // have. Surface a hint in the error field so the UI can show it.
+        // Terminal case 2: we've hit the round budget.
         if (round + 1 == max_rounds) {
-            // Execute one more batch and stop, attaching results so the
-            // user can see the model's last attempt. Then return.
             for (auto& call : calls_this_round) final_result.tool_calls.push_back(std::move(call));
             final_result.success      = true;
             final_result.content      = step.content;
@@ -622,8 +640,50 @@ chat_result send_chat(const chat_request& req, const std::string& api_key) {
             return final_result;
         }
 
-        // Append the assistant message with its tool_calls to the running
-        // messages array so the next round has context.
+        if (req.provider == API_PROVIDER::Anthropic) {
+            // Anthropic flow:
+            //   {role:"assistant", content: [original content blocks]}
+            //   {role:"user",      content: [{type:"tool_result", tool_use_id, content}, ...]}
+            // The original `content` array MUST be replayed verbatim — it
+            // contains the tool_use blocks the next turn refers to via
+            // tool_use_id. step.raw_anthropic_content was preserved in
+            // parse_anthropic_response for exactly this purpose.
+            payload["messages"].push_back({
+                {"role",    "assistant"},
+                {"content", step.raw_anthropic_content.is_null()
+                                ? nlohmann::json::array()
+                                : step.raw_anthropic_content},
+            });
+
+            nlohmann::json tool_results = nlohmann::json::array();
+            for (auto& call : calls_this_round) {
+                const auto t0 = std::chrono::steady_clock::now();
+                const auto mcp_result = hyni::mcp::registry::call(call.name, call.arguments);
+                const auto t1 = std::chrono::steady_clock::now();
+                call.latency_ms  = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+                call.result_text = mcp_result.content_text;
+                call.is_error    = mcp_result.is_error;
+
+                nlohmann::json tr = {
+                    {"type",         "tool_result"},
+                    {"tool_use_id",  call.id},
+                    {"content",      call.result_text.empty()
+                                       ? (call.is_error ? mcp_result.error_message : "[no output]")
+                                       : call.result_text},
+                };
+                if (call.is_error) tr["is_error"] = true;
+                tool_results.push_back(std::move(tr));
+                final_result.tool_calls.push_back(std::move(call));
+            }
+            payload["messages"].push_back({
+                {"role",    "user"},
+                {"content", std::move(tool_results)},
+            });
+            continue;
+        }
+
+        // OpenAI-compatible flow: one assistant message with `tool_calls`,
+        // followed by one `role:"tool"` message per call.
         nlohmann::json asst_msg = {
             {"role", "assistant"},
             // Some servers reject `content: null` while requiring it; an
@@ -643,7 +703,6 @@ chat_result send_chat(const chat_request& req, const std::string& api_key) {
         }
         payload["messages"].push_back(asst_msg);
 
-        // Execute each tool call (sequentially — MCP is fast enough).
         for (auto& call : calls_this_round) {
             const auto t0 = std::chrono::steady_clock::now();
             const auto mcp_result = hyni::mcp::registry::call(call.name, call.arguments);
@@ -662,7 +721,7 @@ chat_result send_chat(const chat_request& req, const std::string& api_key) {
         }
     }
 
-    // Should be unreachable given the max_rounds guard above.
+    // Unreachable given the max_rounds guard above.
     final_result.http_status = http_status;
     final_result.latency_ms  = total_latency;
     final_result.error       = "tool-call loop exited without resolution";

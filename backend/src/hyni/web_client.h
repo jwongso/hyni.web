@@ -76,6 +76,12 @@ struct chat_result {
     // Tool calls executed during this request (in order). Empty if the
     // model didn't use tools.
     std::vector<tool_call_log> tool_calls;
+    // Anthropic only: the raw `content` array from this response (preserves
+    // both text and tool_use blocks). The send_chat tool-call loop echoes
+    // this back verbatim as the prior assistant turn when continuing —
+    // Anthropic requires the original tool_use blocks to be present in
+    // the conversation history alongside the subsequent tool_result.
+    nlohmann::json raw_anthropic_content = nullptr;
 };
 
 // Build the request payload for the given provider. Exposed for testing.
