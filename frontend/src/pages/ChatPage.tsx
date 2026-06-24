@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChatMessages } from '../components/ChatMessages';
 import { ImageDropZone } from '../components/ImageDropZone';
 import { ModeToggle } from '../components/ModeToggle';
-import { postChat, fetchConfig } from '../lib/api';
+import { postChat, postChatStream } from '../lib/api';
 import { storage } from '../lib/storage';
 import type {
   AppSettings,
@@ -11,6 +11,7 @@ import type {
   Mode,
   ServerConfig,
 } from '../lib/types';
+import { fetchConfig } from '../lib/api';
 import { createRecognizer } from '../stt';
 import type { SpeechRecognizer } from '../stt/types';
 import { cancelSpeech, speak } from '../tts/webspeech';
@@ -31,20 +32,22 @@ import { cancelSpeech, speak } from '../tts/webspeech';
 // reloads — interview practice sessions are ephemeral by design. (Trivial to
 // add localStorage if you ever want it.)
 export function ChatPage() {
-  const [mode, setMode]         = useState<Mode>('general');
-  const [history, setHistory]   = useState<ChatMessage[]>([]);
-  const [buffer, setBuffer]     = useState('');
-  const [interim, setInterim]   = useState('');
-  const [pendingImgs, setImgs]  = useState<ImageData[]>([]);
-  const [sending, setSending]   = useState(false);
-  const [status, setStatus]     = useState<string>('idle');
-  const [error, setError]       = useState<string>('');
-  const [settings, setSettings] = useState<AppSettings>(() => storage.loadSettings());
-  const [profile]               = useState(() => storage.loadProfile());
-  const [config, setConfig]     = useState<ServerConfig | null>(null);
+  const [mode, setMode]               = useState<Mode>('general');
+  const [history, setHistory]         = useState<ChatMessage[]>([]);
+  const [buffer, setBuffer]           = useState('');
+  const [interim, setInterim]         = useState('');
+  const [pendingImgs, setImgs]        = useState<ImageData[]>([]);
+  const [sending, setSending]         = useState(false);
+  const [streamingText, setStreaming] = useState('');         // assistant text as it arrives
+  const [status, setStatus]           = useState<string>('idle');
+  const [error, setError]             = useState<string>('');
+  const [settings, setSettings]       = useState<AppSettings>(() => storage.loadSettings());
+  const [profile]                     = useState(() => storage.loadProfile());
+  const [config, setConfig]           = useState<ServerConfig | null>(null);
 
   const recognizerRef = useRef<SpeechRecognizer | null>(null);
   const messagesRef   = useRef<HTMLDivElement>(null);
+  const abortRef      = useRef<AbortController | null>(null);
 
   // Load server config once.
   useEffect(() => {
@@ -61,11 +64,11 @@ export function ChatPage() {
     return () => window.removeEventListener('focus', onFocus);
   }, []);
 
-  // Auto-scroll chat to bottom on new messages.
+  // Auto-scroll chat to bottom on new messages or streaming updates.
   useEffect(() => {
     const el = messagesRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [history, sending]);
+  }, [history, sending, streamingText]);
 
   // Tear down the recognizer when the engine selection changes.
   useEffect(() => {
@@ -111,31 +114,79 @@ export function ChatPage() {
     setError('');
     setBuffer('');
     setInterim('');
+    setStreaming('');
 
     const userMsg: ChatMessage = { role: 'user', text, images: pendingImgs };
     const nextHistory = [...history, userMsg];
     setHistory(nextHistory);
     setImgs([]);
 
-    try {
-      const reply = await postChat({
-        provider:    settings.provider,
-        model:       settings.model,
-        mode,
-        profile,
-        history,
-        message:     text,
-        images:      pendingImgs,
-        temperature: settings.temperature,
-        max_tokens:  settings.max_tokens,
-      });
+    const requestBody = {
+      provider:    settings.provider,
+      model:       settings.model,
+      mode,
+      profile,
+      history,
+      message:     text,
+      images:      pendingImgs,
+      temperature: settings.temperature,
+      max_tokens:  settings.max_tokens,
+    };
 
+    // Rollback closure shared across both code paths.
+    const rollback = (reason: string) => {
+      setError(reason);
+      setHistory(history);
+      setBuffer(text);
+      setImgs(pendingImgs);
+    };
+
+    if (settings.stream_replies) {
+      // Streaming path: render tokens as they arrive, speak full text on done.
+      const ac = new AbortController();
+      abortRef.current = ac;
+      let assembled = '';
+
+      await postChatStream(requestBody, {
+        signal: ac.signal,
+        onDelta: (chunk) => {
+          assembled += chunk;
+          setStreaming(assembled);
+        },
+        onDone: (final) => {
+          if (!final.success) {
+            rollback(final.error || `LLM error (HTTP ${final.http_status})`);
+          } else {
+            const asst: ChatMessage = { role: 'assistant', text: assembled };
+            setHistory([...nextHistory, asst]);
+            if (settings.speak_replies) {
+              speak({
+                text: assembled,
+                voiceURI: settings.tts_voice_uri,
+                rate:  settings.tts_rate,
+                pitch: settings.tts_pitch,
+              });
+            }
+          }
+          setStreaming('');
+          setSending(false);
+          abortRef.current = null;
+        },
+        onError: (msg) => {
+          rollback(msg);
+          setStreaming('');
+          setSending(false);
+          abortRef.current = null;
+        },
+      });
+      return;
+    }
+
+    // Blocking path (fallback for benchmarking / engines that don't stream).
+    try {
+      const reply = await postChat(requestBody);
       if (!reply.success) {
-        setError(reply.error || `LLM error (HTTP ${reply.http_status})`);
-        // Roll back: remove the failed user turn so the user can retry.
-        setHistory(history);
-        setBuffer(text);
-        setImgs(pendingImgs);
+        rollback(reply.error || `LLM error (HTTP ${reply.http_status})`);
       } else {
         const asst: ChatMessage = { role: 'assistant', text: reply.content };
         setHistory([...nextHistory, asst]);
@@ -149,14 +200,18 @@ export function ChatPage() {
         }
       }
     } catch (e: any) {
-      setError(e?.message ?? String(e));
-      setHistory(history);
-      setBuffer(text);
-      setImgs(pendingImgs);
+      rollback(e?.message ?? String(e));
     } finally {
       setSending(false);
     }
   }, [buffer, pendingImgs, sending, history, settings, profile, mode]);
+
+  const cancelInflight = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStreaming('');
+    setSending(false);
+  }, []);
 
   // Global `s` hotkey -> send. Suppressed while typing in inputs/textareas.
   useEffect(() => {
@@ -200,7 +255,11 @@ export function ChatPage() {
       </div>
 
       <div className="chat__messages" ref={messagesRef}>
-        <ChatMessages messages={history} pendingAssistant={sending} />
+        <ChatMessages
+          messages={history}
+          streamingText={streamingText}
+          pendingAssistant={sending}
+        />
         {error && <div className="chat__msg system" style={{ color: 'var(--error)' }}>⚠ {error}</div>}
       </div>
 
@@ -214,8 +273,12 @@ export function ChatPage() {
         <div className="input-row">
           <span className="hint">
             Press <kbd>s</kbd> to send (works while not typing).
+            {settings.stream_replies ? ' Replies stream in real time.' : ' Replies wait for completion.'}
             {!hasKey && ' Configure an API key on the backend (env var) to receive answers.'}
           </span>
+          {sending && abortRef.current && (
+            <button className="danger" onClick={cancelInflight}>Stop</button>
+          )}
           <button onClick={() => void send()} disabled={sending || (!buffer.trim() && pendingImgs.length === 0)}>
             {sending ? 'Sending…' : 'Send (s)'}
           </button>

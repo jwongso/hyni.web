@@ -10,8 +10,9 @@ namespace hyniweb {
 class ChatController : public drogon::HttpController<ChatController> {
 public:
     METHOD_LIST_BEGIN
-    ADD_METHOD_TO(ChatController::getConfig, "/api/config",        drogon::Get,     drogon::Options);
-    ADD_METHOD_TO(ChatController::postChat,  "/api/chat",          drogon::Post,    drogon::Options);
+    ADD_METHOD_TO(ChatController::getConfig,     "/api/config",       drogon::Get,  drogon::Options);
+    ADD_METHOD_TO(ChatController::postChat,      "/api/chat",         drogon::Post, drogon::Options);
+    ADD_METHOD_TO(ChatController::postChatStream,"/api/chat/stream",  drogon::Post, drogon::Options);
     METHOD_LIST_END
 
     void getConfig(const drogon::HttpRequestPtr& req,
@@ -19,6 +20,9 @@ public:
 
     void postChat(const drogon::HttpRequestPtr& req,
                   std::function<void(const drogon::HttpResponsePtr&)>&& callback);
+
+    void postChatStream(const drogon::HttpRequestPtr& req,
+                        std::function<void(const drogon::HttpResponsePtr&)>&& callback);
 };
 
 } // namespace hyniweb

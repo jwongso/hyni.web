@@ -205,6 +205,24 @@ export function SettingsPage() {
         </label>
       </div>
 
+      <h2>Response delivery</h2>
+      <div className="field">
+        <label>
+          <input
+            type="checkbox"
+            checked={settings.stream_replies}
+            onChange={(e) => settingsChange('stream_replies', e.target.checked)}
+            style={{ width: 'auto', marginRight: '0.5rem' }}
+          />
+          Stream replies (tokens render as they arrive — much snappier perceived latency)
+        </label>
+        <small>
+          Off → wait for the full reply, then render and speak. On → see tokens
+          appear live; TTS still speaks the full assembled reply at the end
+          (the Web Speech API has no incremental utterance API).
+        </small>
+      </div>
+
       <div className="row" style={{ marginTop: '1.5rem' }}>
         <button onClick={save}>Save</button>
         <button className="secondary" onClick={reset}>Reset all</button>

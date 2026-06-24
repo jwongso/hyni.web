@@ -55,6 +55,13 @@ export interface AppSettings {
   temperature: number;       // 0.0 - 1.5
   max_tokens: number;
   speak_replies: boolean;
+  /**
+   * If true, /api/chat/stream is used and the reply is rendered as tokens
+   * arrive. TTS still speaks the full assembled text at the end (Web Speech
+   * API has no incremental utterance API; chunked speak() would sound
+   * stuttery). If false, the blocking /api/chat endpoint is used.
+   */
+  stream_replies: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -67,6 +74,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   temperature: 0.7,
   max_tokens: 4096,
   speak_replies: true,
+  stream_replies: true,
 };
 
 export interface ChatRequestBody {

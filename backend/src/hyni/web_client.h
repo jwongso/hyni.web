@@ -44,6 +44,31 @@ std::string default_model(API_PROVIDER provider);
 // is populated.
 chat_result send_chat(const chat_request& req, const std::string& api_key);
 
+// ---------------------------------------------------------------------------
+// Streaming variant.
+//
+// Sets `stream: true` on the outgoing payload, parses Server-Sent-Event
+// frames from the provider (OpenAI / DeepSeek / Mistral all use the same
+// `data: {json}\n\n` shape; Anthropic uses `event:` + `data:` pairs with
+// content_block_delta events), and invokes `on_delta` for each text chunk
+// as it arrives.
+//
+// `on_delta(text_chunk)` should return false to request cancellation. When
+// the upstream call finishes (successfully, with an error, or cancelled),
+// `on_done(chat_result)` is invoked exactly once with usage/latency/error.
+//
+// This call is synchronous from the caller's perspective: it returns only
+// after the upstream stream ends (or the caller cancels). Both callbacks
+// run on the calling thread.
+// ---------------------------------------------------------------------------
+using stream_delta_cb = std::function<bool(std::string_view text)>;
+using stream_done_cb  = std::function<void(const chat_result&)>;
+
+void send_chat_stream(const chat_request& req,
+                      const std::string& api_key,
+                      const stream_delta_cb& on_delta,
+                      const stream_done_cb& on_done);
+
 } // namespace hyni
 
 #endif // HYNI_WEB_CLIENT_H

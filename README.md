@@ -81,8 +81,8 @@ flowchart LR
     stt -.uses one of.-> ws & wstream & tjs
 
     subgraph Backend["Drogon C++ backend (:8848)"]
-        api["ChatController<br/>/api/config<br/>/api/chat"]
-        client["hyni::web_client<br/>(stateless libcurl)"]
+        api["ChatController<br/>/api/config<br/>/api/chat<br/>/api/chat/stream (SSE)"]
+        client["hyni::web_client<br/>(libcurl + simdjson)<br/>send_chat / send_chat_stream"]
         prompt["hyni::sys_prompts<br/>(STAR / Coding / General)"]
         static["Static file handler<br/>+ COOP/COEP headers"]
 
@@ -156,15 +156,19 @@ sequenceDiagram
 
 | Concern             | Choice                                                                                    |
 |---------------------|-------------------------------------------------------------------------------------------|
-| Language            | C++20                                                                                     |
+| Language            | **C++23** (GNU/Clang)                                                                      |
 | HTTP framework      | [Drogon](https://github.com/drogonframework/drogon) v1.9.7 (pulled via CPM / FetchContent) |
 | Build               | CMake ≥ 3.20, optional `ccache`                                                            |
+| Release flags       | `-O3 -pipe -flto -march=znver5 -fno-plt` + `-Wl,-z,now,-z,relro` (toggle off with `-DHYNI_NATIVE_OPTS=OFF` for portable builds) |
+| Debug flags         | `-O0 -g -fsanitize=address,undefined`                                                      |
 | HTTP client         | libcurl (HTTP/2, system)                                                                  |
-| JSON                | `nlohmann/json` (system, header-only)                                                     |
-| Threading           | Drogon's IO loops; LLM calls dispatched off the accept loop                               |
-| State               | Fully stateless `/api/chat`; the SPA owns conversation history                            |
-| LLM providers       | OpenAI · Anthropic · DeepSeek · Mistral (DeepSeek & Mistral share OpenAI wire format)      |
-| Multimodal          | Per-provider image_url / source.image base64 attachments                                  |
+| **JSON parsing**    | **simdjson** 4.x ondemand (2-4 GB/s, system shared lib)                                    |
+| JSON building       | nlohmann/json (header-only, ergonomic API)                                                 |
+| Threading           | Drogon's IO loops; LLM calls dispatched off the accept loop                                |
+| State               | Fully stateless `/api/chat` and `/api/chat/stream`; the SPA owns conversation history       |
+| LLM providers       | OpenAI · Anthropic · DeepSeek · Mistral (DeepSeek & Mistral share OpenAI wire format)       |
+| **Streaming**       | **`POST /api/chat/stream`** — SSE chunked, parses provider SSE frames, normalizes to `{delta}` events |
+| Multimodal          | Per-provider `image_url` / `source.image` base64 attachments                               |
 | Cross-origin policy | `COOP: same-origin`, `COEP: credentialless`, `CORP: cross-origin` on every response (for WASM threading on the frontend) |
 
 Source map:
@@ -172,11 +176,12 @@ Source map:
 ```
 backend/src/
 ├── main.cc                       # Drogon entry + global COOP/COEP advice
-├── controllers/ChatController.*  # /api/config, /api/chat
+├── controllers/ChatController.*  # /api/config, /api/chat, /api/chat/stream (SSE)
 └── hyni/
     ├── types.h                   # API_PROVIDER, QUESTION_TYPE, image_data, ...
     ├── sys_prompts.{h,cpp}       # composes mode-specific system prompts
     └── web_client.{h,cpp}        # stateless payload builder + libcurl POST
+                                  # + send_chat_stream() with SSE frame parser
 ```
 
 ### Frontend — `frontend/`
@@ -373,17 +378,20 @@ and skips firing — type freely in any field without accidental sends.
 
 ## Roadmap
 
-- [x] Drogon backend with COOP/COEP, OpenAI + Anthropic + DeepSeek + Mistral
+- [x] Drogon backend (C++23) with COOP/COEP, OpenAI + Anthropic + DeepSeek + Mistral
 - [x] React/Vite SPA: Chat, Settings, Benchmark pages
 - [x] STAR + resume grounding for Behavioral mode
 - [x] Python-default for Coding mode
 - [x] Drag-and-drop multimodal images
 - [x] Cloudflare Tunnel exposing `hyni.localrun.ai`
+- [x] **simdjson** ondemand parsing throughout (request + LLM responses + SSE frames)
+- [x] **Streaming** via `POST /api/chat/stream` — SSE, normalised across providers, with frontend live-render + cancel
+- [x] Production-grade Release codegen: C++23, `-O3 -pipe -flto -march=znver5 -fno-plt`
 - [ ] Wire the **wstream WASM** adapter (whisper.cpp + Silero VAD in browser)
 - [ ] Wire the **transformers.js Whisper** adapter (Hugging Face ONNX)
 - [ ] PDF resume parsing on the Settings page
 - [ ] Conversation persistence + export
-- [ ] Streaming responses (SSE) for snappier perceived latency
+- [ ] HTTP/2 keep-alive pool to provider endpoints (currently one TLS handshake per turn)
 
 ---
 

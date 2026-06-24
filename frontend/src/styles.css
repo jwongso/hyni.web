@@ -186,6 +186,16 @@ textarea { resize: vertical; font-family: var(--mono); }
   font-size: 0.85rem;
 }
 
+.cursor-blink {
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--accent-2);
+  animation: cursor-blink 1s steps(2) infinite;
+}
+@keyframes cursor-blink {
+  to { opacity: 0; }
+}
+
 .chat__input {
   border-top: 1px solid var(--border);
   background: var(--panel);
