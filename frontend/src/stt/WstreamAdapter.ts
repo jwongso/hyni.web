@@ -387,9 +387,11 @@ registerAdapter({
     label: 'wstream (local whisper.cpp)',
     description:
       'whisper.cpp + Silero VAD running entirely in your browser. Fully private — ' +
-      'audio never leaves the device. First run downloads the ~57 MB base.en model ' +
-      'into IndexedDB; subsequent loads are instant. Needs a cross-origin-isolated ' +
-      'context (https:// or http://localhost) for SharedArrayBuffer + WASM threads.',
+      'audio never leaves the device. Experimental: WASM/CPU-only, ~0.5-1× real-time, ' +
+      'so transcripts arrive a few seconds after you stop talking. First run downloads ' +
+      'a ~57 MB base.en model into IndexedDB; subsequent loads are instant. Needs a ' +
+      'cross-origin-isolated context (https:// or http://localhost) for SharedArrayBuffer ' +
+      '+ WASM threads.',
     capabilities: {
       interim: false,           // final-segment-only via Whisper
       offline: true,
