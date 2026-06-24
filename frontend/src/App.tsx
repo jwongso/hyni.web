@@ -1,7 +1,6 @@
 import { Link, NavLink, Route, Routes } from 'react-router-dom';
 import { ChatPage } from './pages/ChatPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { BenchmarkPage } from './pages/BenchmarkPage';
 import { FengShuiBadge } from './components/FengShuiBadge';
 
 // Inline SVG mark for the header. Same shape as /favicon.svg but with a
@@ -45,7 +44,6 @@ export function App() {
         <nav className="app__nav">
           <NavLink to="/"          end className={navClass}>Chat</NavLink>
           <NavLink to="/settings"      className={navClass}>Settings</NavLink>
-          <NavLink to="/benchmark"     className={navClass}>STT Benchmark</NavLink>
         </nav>
         <div className="app__spacer" />
         <FengShuiBadge />
@@ -54,7 +52,6 @@ export function App() {
         <Routes>
           <Route path="/"           element={<ChatPage />} />
           <Route path="/settings"   element={<SettingsPage />} />
-          <Route path="/benchmark"  element={<BenchmarkPage />} />
         </Routes>
       </main>
     </div>
