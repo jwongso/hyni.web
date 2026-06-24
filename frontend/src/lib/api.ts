@@ -54,6 +54,8 @@ export interface ChatStreamDone {
 
 export interface ChatStreamHandlers {
   onDelta(text: string): void;
+  /** Reasoning-model chain-of-thought; rendered in a collapsible widget. */
+  onReasoning?(text: string): void;
   onDone(final: ChatStreamDone): void;
   onError(message: string): void;
   /** Abort signal: cancels the underlying fetch, which aborts the LLM call. */
@@ -127,6 +129,8 @@ export async function postChatStream(
           h.onDone(obj as ChatStreamDone);
         } else if (typeof obj.delta === 'string') {
           h.onDelta(obj.delta);
+        } else if (typeof obj.reasoning === 'string') {
+          h.onReasoning?.(obj.reasoning);
         } else if (obj.error) {
           h.onError(String(obj.error));
         }

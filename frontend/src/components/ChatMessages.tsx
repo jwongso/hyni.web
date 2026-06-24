@@ -5,6 +5,8 @@ interface Props {
   messages: ChatMessage[];
   /** If non-empty, render an assistant bubble with this in-flight text. */
   streamingText?: string;
+  /** Optional reasoning-model chain-of-thought streaming alongside the answer. */
+  streamingReasoning?: string;
   /** If true (and streamingText is empty), show a "thinking…" placeholder. */
   pendingAssistant?: boolean;
   /** Provider/model currently selected — shown on in-flight assistant bubbles. */
@@ -17,13 +19,24 @@ interface Props {
 function modelLabel(provider?: string, model?: string): string {
   if (!provider && !model) return 'assistant';
   let m = (model || '').trim();
-  // Strip .gguf / .bin etc.
   m = m.replace(/\.(gguf|bin|safetensors)$/i, '');
-  // Strip leading org/, owner_ prefixes for HF-style names.
   m = m.replace(/^[A-Za-z0-9_.-]+[_/]/, '');
   if (provider && m)   return `${provider} · ${m}`;
   if (provider)        return provider;
   return m || 'assistant';
+}
+
+// Collapsible chain-of-thought disclosure. Default-collapsed so the visible
+// answer stays clean; the user can open it if they want to see how the
+// reasoning model got there.
+function ReasoningBlock({ text }: { text: string }) {
+  if (!text) return null;
+  return (
+    <details className="reasoning">
+      <summary>💭 Thinking…  <span className="reasoning__hint">(click to expand)</span></summary>
+      <div className="reasoning__body">{text}</div>
+    </details>
+  );
 }
 
 // Renders a conversation as bubbles. Pre-wraps long content; image
@@ -32,9 +45,10 @@ function modelLabel(provider?: string, model?: string): string {
 // timestamp (via fengshui.overhired.work) — green = lucky day,
 // gold = ordinary, red = unlucky. Silently absent if the API is offline.
 export function ChatMessages({
-  messages, streamingText, pendingAssistant, currentProvider, currentModel,
+  messages, streamingText, streamingReasoning,
+  pendingAssistant, currentProvider, currentModel,
 }: Props) {
-  if (messages.length === 0 && !pendingAssistant && !streamingText) {
+  if (messages.length === 0 && !pendingAssistant && !streamingText && !streamingReasoning) {
     return (
       <div className="chat__msg system">
         Tap <strong>Start listening</strong>, have your interviewer ask a
@@ -54,6 +68,7 @@ export function ChatMessages({
               <span>{label}</span>
               {m.at != null && <DayDot at={m.at} />}
             </div>
+            {m.role === 'assistant' && m.reasoning ? <ReasoningBlock text={m.reasoning} /> : null}
             {m.text}
             {m.images && m.images.length > 0 && (
               <div className="images">
@@ -69,17 +84,19 @@ export function ChatMessages({
           </div>
         );
       })}
-      {streamingText !== undefined && streamingText.length > 0 && (
+      {(streamingText !== undefined && streamingText.length > 0) ||
+       (streamingReasoning !== undefined && streamingReasoning.length > 0) ? (
         <div className="chat__msg assistant">
           <div className="role">
             <span>{liveLabel}</span>
             <span style={{ opacity: 0.6 }}>· streaming…</span>
           </div>
+          {streamingReasoning ? <ReasoningBlock text={streamingReasoning} /> : null}
           {streamingText}
-          <span className="cursor-blink">▍</span>
+          {streamingText ? <span className="cursor-blink">▍</span> : null}
         </div>
-      )}
-      {pendingAssistant && !streamingText && (
+      ) : null}
+      {pendingAssistant && !streamingText && !streamingReasoning && (
         <div className="chat__msg assistant">
           <div className="role">{liveLabel}</div>
           <em>thinking…</em>

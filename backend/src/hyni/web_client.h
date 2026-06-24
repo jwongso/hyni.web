@@ -75,7 +75,11 @@ chat_result send_chat(const chat_request& req, const std::string& api_key);
 // frames from the provider (OpenAI / DeepSeek / Mistral all use the same
 // `data: {json}\n\n` shape; Anthropic uses `event:` + `data:` pairs with
 // content_block_delta events), and invokes `on_delta` for each text chunk
-// as it arrives.
+// as it arrives. `on_reasoning` (optional) fires separately for chunks of
+// a reasoning model's internal monologue (Qwen3 / DeepSeek-R1 / GPT-5's
+// `reasoning_content` field) — keeping it on its own channel lets the
+// frontend render the chain-of-thought collapsibly instead of mixing it
+// into the visible answer.
 //
 // `on_delta(text_chunk)` should return false to request cancellation. When
 // the upstream call finishes (successfully, with an error, or cancelled),
@@ -85,12 +89,22 @@ chat_result send_chat(const chat_request& req, const std::string& api_key);
 // after the upstream stream ends (or the caller cancels). Both callbacks
 // run on the calling thread.
 // ---------------------------------------------------------------------------
-using stream_delta_cb = std::function<bool(std::string_view text)>;
-using stream_done_cb  = std::function<void(const chat_result&)>;
+using stream_delta_cb     = std::function<bool(std::string_view text)>;
+using stream_reasoning_cb = std::function<bool(std::string_view text)>;
+using stream_done_cb      = std::function<void(const chat_result&)>;
 
 void send_chat_stream(const chat_request& req,
                       const std::string& api_key,
                       const stream_delta_cb& on_delta,
+                      const stream_done_cb& on_done);
+
+// Overload with separate reasoning channel. Passing an empty/null
+// reasoning callback is equivalent to the 4-arg form (and reasoning
+// chunks are silently dropped from the visible answer).
+void send_chat_stream(const chat_request& req,
+                      const std::string& api_key,
+                      const stream_delta_cb& on_delta,
+                      const stream_reasoning_cb& on_reasoning,
                       const stream_done_cb& on_done);
 
 } // namespace hyni

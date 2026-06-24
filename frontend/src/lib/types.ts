@@ -51,6 +51,8 @@ export interface ChatMessage {
   /** Provider+model that produced this assistant message (shown in the bubble header). */
   model?: string;
   provider?: string;
+  /** Reasoning-model chain-of-thought; rendered in a collapsible widget. */
+  reasoning?: string;
 }
 
 export interface UserProfile {

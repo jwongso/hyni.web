@@ -40,13 +40,14 @@ export function ChatPage() {
   const { mode, setMode, history, setHistory, buffer, setBuffer,
           pendingImgs, setPendingImgs } = useChatStore();
 
-  const [interim, setInterim]         = useState('');
-  const [sending, setSending]         = useState(false);
-  const [streamingText, setStreaming] = useState('');
-  const [error, setError]             = useState<string>('');
-  const [settings, setSettings]       = useState<AppSettings>(() => storage.loadSettings());
-  const [profile]                     = useState(() => storage.loadProfile());
-  const [config, setConfig]           = useState<ServerConfig | null>(null);
+  const [interim, setInterim]               = useState('');
+  const [sending, setSending]               = useState(false);
+  const [streamingText, setStreaming]       = useState('');
+  const [streamingReasoning, setReasoning]  = useState('');
+  const [error, setError]                   = useState<string>('');
+  const [settings, setSettings]             = useState<AppSettings>(() => storage.loadSettings());
+  const [profile]                           = useState(() => storage.loadProfile());
+  const [config, setConfig]                 = useState<ServerConfig | null>(null);
 
   const messagesRef = useRef<HTMLDivElement>(null);
   const abortRef    = useRef<AbortController | null>(null);
@@ -147,6 +148,7 @@ export function ChatPage() {
     setBuffer('');
     setInterim('');
     setStreaming('');
+    setReasoning('');
 
     const userMsg: ChatMessage = { role: 'user', text, images: pendingImgs, at: Date.now() };
     const nextHistory = [...history, userMsg];
@@ -182,12 +184,17 @@ export function ChatPage() {
       const ac = new AbortController();
       abortRef.current = ac;
       let assembled = '';
+      let assembledReasoning = '';
 
       await postChatStream(requestBody, {
         signal: ac.signal,
         onDelta: (chunk) => {
           assembled += chunk;
           setStreaming(assembled);
+        },
+        onReasoning: (chunk) => {
+          assembledReasoning += chunk;
+          setReasoning(assembledReasoning);
         },
         onDone: (final) => {
           if (!final.success) {
@@ -196,6 +203,7 @@ export function ChatPage() {
             const asst: ChatMessage = {
               role: 'assistant', text: assembled, at: Date.now(),
               provider: settings.provider, model: settings.model,
+              reasoning: assembledReasoning || undefined,
             };
             setHistory([...nextHistory, asst]);
             if (settings.speak_replies) {
@@ -207,12 +215,14 @@ export function ChatPage() {
             }
           }
           setStreaming('');
+          setReasoning('');
           setSending(false);
           abortRef.current = null;
         },
         onError: (msg) => {
           rollback(msg);
           setStreaming('');
+          setReasoning('');
           setSending(false);
           abortRef.current = null;
         },
@@ -322,6 +332,7 @@ export function ChatPage() {
         <ChatMessages
           messages={history}
           streamingText={streamingText}
+          streamingReasoning={streamingReasoning}
           pendingAssistant={sending}
           currentProvider={settings.provider}
           currentModel={settings.model}

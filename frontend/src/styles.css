@@ -310,6 +310,41 @@ textarea { resize: vertical; font-family: var(--mono); }
   to { opacity: 0; }
 }
 
+/* Reasoning-model chain-of-thought, rendered as a collapsible disclosure
+   above the visible answer. Default-collapsed; dimmed + monospaced so it
+   visually reads as "transcript / debug", not "the answer". */
+.chat__msg .reasoning {
+  margin: 0 0 0.5rem 0;
+  padding: 0.25rem 0.5rem;
+  background: rgba(255,255,255,0.04);
+  border-left: 2px solid var(--accent-2);
+  border-radius: 4px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.chat__msg .reasoning summary {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+  list-style: none;
+}
+.chat__msg .reasoning summary::-webkit-details-marker { display: none; }
+.chat__msg .reasoning__hint {
+  opacity: 0.55;
+  font-weight: 400;
+  font-size: 0.75rem;
+}
+.chat__msg .reasoning[open] summary { margin-bottom: 0.35rem; }
+.chat__msg .reasoning__body {
+  white-space: pre-wrap;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  opacity: 0.85;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
 .chat__input {
   border-top: 1px solid var(--border);
   background: var(--panel);

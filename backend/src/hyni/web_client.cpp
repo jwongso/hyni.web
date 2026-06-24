@@ -555,9 +555,11 @@ namespace {
 // of curl_easy_perform.
 struct stream_ctx {
     API_PROVIDER provider;
-    const stream_delta_cb* on_delta;
+    const stream_delta_cb*     on_delta;
+    const stream_reasoning_cb* on_reasoning;  // may be null
     std::string  sse_buffer;     // accumulates bytes across libcurl chunks
     std::string  full_content;   // assistant reply assembled for final result
+    std::string  full_reasoning; // model's chain-of-thought (reasoning_content)
     std::string  error_text;
     int          prompt_tokens     = 0;
     int          completion_tokens = 0;
@@ -607,18 +609,10 @@ bool apply_openai_frame(stream_ctx& ctx, std::string_view payload) {
         simdjson::ondemand::value delta;
         if (choice["delta"].get(delta) != simdjson::SUCCESS) continue;
 
-        // Try the standard `content` field first; fall back to
-        // `reasoning_content` / `reasoning` for reasoning models (Qwen3 /
-        // DeepSeek-R1 / GPT-5).
-        //
-        // IMPORTANT: llama.cpp's first chunk for chat completions is
-        //   {"role":"assistant","content":null}
         // simdjson's ondemand `get<string_view>()` on a `null` value returns
-        // INCORRECT_TYPE *and* leaves the cursor in an indeterminate state,
-        // so any subsequent `delta["reasoning_content"]` lookup on the same
-        // value silently fails. We therefore extract each candidate as a
-        // raw `value`, skip it if null/absent/non-string, and only then try
-        // to consume it.
+        // INCORRECT_TYPE *and* leaves the cursor in an indeterminate state.
+        // (llama.cpp's first chunk is {"role":"assistant","content":null}.)
+        // Extract each candidate as a raw value, skip if null/non-string.
         auto extract = [](simdjson::ondemand::value& obj, const char* key,
                           std::string_view& out) -> bool {
             simdjson::ondemand::value v;
@@ -631,17 +625,32 @@ bool apply_openai_frame(stream_ctx& ctx, std::string_view payload) {
             return true;
         };
 
+        // Visible answer — `content` is the canonical field across all
+        // OpenAI-compatible providers.
         std::string_view content;
-        bool has_text =
-            extract(delta, "content",           content) ||
-            extract(delta, "reasoning_content", content) ||
-            extract(delta, "reasoning",         content);
-        if (!has_text) continue;
+        if (extract(delta, "content", content)) {
+            ctx.full_content.append(content);
+            if (ctx.on_delta && !(*ctx.on_delta)(content)) {
+                ctx.cancelled = true;
+                return false;
+            }
+        }
 
-        ctx.full_content.append(content);
-        if (ctx.on_delta && !(*ctx.on_delta)(content)) {
-            ctx.cancelled = true;
-            return false;
+        // Reasoning model's chain-of-thought — kept on its own channel so
+        // the frontend can render it in a collapsible "Thinking…" widget
+        // rather than mixing it into the visible answer. Both fields may
+        // appear (Qwen3 emits `reasoning_content`; some forks use
+        // `reasoning`); never both populated in the same chunk, so the
+        // `else if` saves one ondemand lookup.
+        std::string_view reasoning;
+        if (extract(delta, "reasoning_content", reasoning) ||
+            extract(delta, "reasoning",         reasoning)) {
+            ctx.full_reasoning.append(reasoning);
+            if (ctx.on_reasoning && *ctx.on_reasoning &&
+                !(*ctx.on_reasoning)(reasoning)) {
+                ctx.cancelled = true;
+                return false;
+            }
         }
         break;  // single choice only
     }
@@ -766,6 +775,7 @@ void enable_streaming(nlohmann::json& payload, API_PROVIDER p) {
 void send_chat_stream(const chat_request& req,
                       const std::string& api_key,
                       const stream_delta_cb& on_delta,
+                      const stream_reasoning_cb& on_reasoning,
                       const stream_done_cb& on_done) {
     chat_result r;
     if (api_key.empty() && req.provider != API_PROVIDER::Local) {
@@ -805,8 +815,9 @@ void send_chat_stream(const chat_request& req,
     }
 
     stream_ctx ctx;
-    ctx.provider = req.provider;
-    ctx.on_delta = &on_delta;
+    ctx.provider     = req.provider;
+    ctx.on_delta     = &on_delta;
+    ctx.on_reasoning = &on_reasoning;
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -815,8 +826,6 @@ void send_chat_stream(const chat_request& req,
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(payload_str.size()));
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stream_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx);
-    // For SSE we want chunks to flow through with low latency; disable the
-    // default 100-continue handshake delay and the curl read buffer headroom.
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(req.timeout_seconds));
     curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2_0);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -847,12 +856,33 @@ void send_chat_stream(const chat_request& req,
     } else if (rc != CURLE_OK) {
         r.success = false;
         r.error   = std::string("HTTP transport error: ") + curl_easy_strerror(rc);
+    } else if (!r.content.empty()) {
+        r.success = true;
+    } else if (!ctx.full_reasoning.empty()) {
+        // Reasoning-only output: the model burned every token on its
+        // chain-of-thought and never reached a visible answer. Surface the
+        // reasoning so the user has SOMETHING to read, and tell them how
+        // to fix it.
+        r.success = true;
+        r.content = "[The model spent all available tokens reasoning and "
+                    "didn't reach a final answer. Try a larger max_tokens "
+                    "(e.g. 8192+) for reasoning models.]\n\n— Internal "
+                    "reasoning that was produced:\n" + ctx.full_reasoning;
     } else {
-        r.success = !r.content.empty();
-        if (!r.success) r.error = "stream finished with empty content";
+        r.success = false;
+        r.error   = "stream finished with empty content";
     }
 
     on_done(r);
+}
+
+// 4-arg overload: no reasoning channel — reasoning chunks are dropped.
+void send_chat_stream(const chat_request& req,
+                      const std::string& api_key,
+                      const stream_delta_cb& on_delta,
+                      const stream_done_cb& on_done) {
+    static const stream_reasoning_cb null_cb;
+    send_chat_stream(req, api_key, on_delta, null_cb, on_done);
 }
 
 } // namespace hyni

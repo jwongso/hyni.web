@@ -362,11 +362,19 @@ void ChatController::postChatStream(const drogon::HttpRequestPtr& req,
                     };
 
                     hyni::send_chat_stream(*cr_ptr, *api_key_ptr,
-                        // on_delta: forward each text chunk as an SSE frame.
+                        // on_delta: visible answer text — forward as SSE frame.
                         // Return value (false = client disconnected) is
                         // honoured by web_client to abort the upstream call.
                         [&](std::string_view delta) {
                             return send_frame({{"delta", std::string(delta)}});
+                        },
+                        // on_reasoning: chain-of-thought from reasoning models
+                        // (Qwen3 / DeepSeek-R1 / GPT-5). Frontend renders this
+                        // in a collapsible "Thinking…" widget — keeping it on
+                        // a separate channel prevents the monologue from
+                        // polluting the visible answer.
+                        [&](std::string_view reasoning) {
+                            return send_frame({{"reasoning", std::string(reasoning)}});
                         },
                         // on_done: emit final frame with usage / status / error
                         // and gracefully close the chunked transfer.
