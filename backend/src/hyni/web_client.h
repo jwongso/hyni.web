@@ -46,6 +46,16 @@ nlohmann::json build_payload(const chat_request& req);
 // Default model per provider.
 std::string default_model(API_PROVIDER provider);
 
+/** A single curated model entry surfaced to the frontend. */
+struct model_info {
+    std::string id;            // exact slug to send in the API call
+    std::string label;         // human-readable picker label
+    bool        vision = false;// model accepts image inputs
+};
+
+/** List the curated models for a provider (hand-maintained in web_client.cpp). */
+std::vector<model_info> list_models(API_PROVIDER provider);
+
 // Execute a stateless chat completion. Reads the API key from `api_key`.
 // Returns a chat_result; on transport/HTTP failure success=false and error
 // is populated.

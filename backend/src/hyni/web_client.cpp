@@ -21,12 +21,87 @@ constexpr const char DEFAULT_ANTHROPIC_MODEL[] = "claude-sonnet-4-5-20250929";
 constexpr const char DEFAULT_DEEPSEEK_MODEL[]  = "deepseek-chat";
 constexpr const char DEFAULT_MISTRAL_MODEL[]   = "mistral-large-latest";
 
+// Curated, hand-tuned per-provider model catalogues exposed via /api/config
+// so the frontend can render a real dropdown instead of a free-text input
+// (which let users type non-existent slugs like 'deepseek-vl2'). Each entry
+// is (id, label, vision_capable). Keep this list short and current — every
+// addition here is a +1 to the picker; the user only has to redeploy the
+// backend, not the SPA.
+struct model_meta {
+    const char* id;
+    const char* label;
+    bool        vision;
+};
+
+// Update freely as providers ship new models. Keep the default model
+// (DEFAULT_*_MODEL above) inside its own catalogue so the picker always
+// has a guaranteed match for the saved value.
+constexpr model_meta OPENAI_MODELS[] = {
+    {"gpt-4o",                 "GPT-4o (vision)",          true },
+    {"gpt-4o-mini",            "GPT-4o mini (vision)",     true },
+    {"gpt-5",                  "GPT-5",                    true },
+    {"gpt-5-mini",             "GPT-5 mini",               true },
+    {"gpt-5.5",                "GPT-5.5",                  true },
+    {"o1",                     "o1 (reasoning, vision)",   true },
+    {"o3-mini",                "o3-mini (reasoning)",      false},
+};
+
+constexpr model_meta ANTHROPIC_MODELS[] = {
+    {"claude-opus-4-5-20251101",     "Claude Opus 4.5 (vision)",   true},
+    {"claude-sonnet-4-5-20250929",   "Claude Sonnet 4.5 (vision)", true},
+    {"claude-haiku-4-5-20250929",    "Claude Haiku 4.5 (vision)",  true},
+    {"claude-3-5-sonnet-20241022",   "Claude 3.5 Sonnet (vision)", true},
+    {"claude-3-5-haiku-20241022",    "Claude 3.5 Haiku",           false},
+};
+
+constexpr model_meta DEEPSEEK_MODELS[] = {
+    {"deepseek-chat",      "DeepSeek-V3 chat",     false},
+    {"deepseek-reasoner",  "DeepSeek-R1 reasoner", false},
+};
+
+constexpr model_meta MISTRAL_MODELS[] = {
+    {"mistral-large-latest",   "Mistral Large",                 false},
+    {"pixtral-large-latest",   "Pixtral Large (vision)",        true },
+    {"pixtral-12b-2409",       "Pixtral 12B (vision)",          true },
+    {"mistral-small-latest",   "Mistral Small",                 false},
+};
+
 size_t curl_write(void* contents, size_t size, size_t nmemb, std::string* out) {
     if (!out) return 0;
     size_t n = size * nmemb;
     try { out->append(static_cast<char*>(contents), n); }
     catch (const std::bad_alloc&) { return 0; }
     return n;
+}
+
+// Per-model capability quirks.
+//
+// As of 2026:
+//   - OpenAI's GPT-5 family (gpt-5, gpt-5.5, gpt-5-mini, ...) rejects any
+//     `temperature` value other than the implicit default 1; sending
+//     temperature:0 yields a 400 'Unsupported value' error. We omit the
+//     field entirely on those models.
+//   - DeepSeek's chat models — including deepseek-vl2 as of writing — do
+//     not accept OpenAI-style `image_url` content blocks; the API errors
+//     with 'unknown variant image_url'. We silently drop image content
+//     when targeting DeepSeek. The text and history still flow.
+//   - Mistral's pixtral-* lineage handles `image_url` correctly (other
+//     mistral models simply ignore image blocks). Treat all mistral
+//     models as image-capable; the user-facing UX should pick a vision
+//     model if they want strong results.
+//   - Anthropic Opus / Sonnet handle `temperature` and images natively.
+bool model_supports_temperature(API_PROVIDER p, const std::string& model) {
+    if (p != API_PROVIDER::OpenAI) return true;
+    // gpt-5* refuses non-default temperature.
+    return model.rfind("gpt-5", 0) != 0;
+}
+
+bool provider_supports_images(API_PROVIDER p) {
+    // DeepSeek's HTTP API rejects image_url content blocks today, even on
+    // their vision-tier model. Drop images server-side so requests don't
+    // 400 — callers can keep a single payload shape regardless of
+    // which provider they pick.
+    return p != API_PROVIDER::DeepSeek;
 }
 
 nlohmann::json build_openai_messages(const chat_request& req) {
@@ -38,21 +113,25 @@ nlohmann::json build_openai_messages(const chat_request& req) {
         messages.push_back({{"role", "system"}, {"content", sys}});
     }
 
-    auto push_user_with_images = [](nlohmann::json& msgs,
-                                    const std::string& text,
-                                    const std::vector<image_data>& images) {
+    const bool allow_images = provider_supports_images(req.provider);
+
+    auto push_user_with_images = [allow_images](nlohmann::json& msgs,
+                                                 const std::string& text,
+                                                 const std::vector<image_data>& images) {
         nlohmann::json content = nlohmann::json::array();
         if (!text.empty()) {
             content.push_back({{"type", "text"}, {"text", text}});
         }
-        for (const auto& img : images) {
-            if (!img.is_valid()) continue;
-            content.push_back({
-                {"type", "image_url"},
-                {"image_url", {
-                    {"url", "data:" + img.mime_type + ";base64," + img.image_base64}
-                }}
-            });
+        if (allow_images) {
+            for (const auto& img : images) {
+                if (!img.is_valid()) continue;
+                content.push_back({
+                    {"type", "image_url"},
+                    {"image_url", {
+                        {"url", "data:" + img.mime_type + ";base64," + img.image_base64}
+                    }}
+                });
+            }
         }
         if (content.empty()) {
             content.push_back({{"type", "text"}, {"text", "[empty message]"}});
@@ -131,6 +210,24 @@ std::string default_model(API_PROVIDER provider) {
     }
 }
 
+template <std::size_t N>
+static std::vector<model_info> materialize(const model_meta (&arr)[N]) {
+    std::vector<model_info> out;
+    out.reserve(N);
+    for (const auto& m : arr) out.push_back({m.id, m.label, m.vision});
+    return out;
+}
+
+std::vector<model_info> list_models(API_PROVIDER provider) {
+    switch (provider) {
+    case API_PROVIDER::OpenAI:    return materialize(OPENAI_MODELS);
+    case API_PROVIDER::Anthropic: return materialize(ANTHROPIC_MODELS);
+    case API_PROVIDER::DeepSeek:  return materialize(DEEPSEEK_MODELS);
+    case API_PROVIDER::Mistral:   return materialize(MISTRAL_MODELS);
+    default:                       return {};
+    }
+}
+
 nlohmann::json build_payload(const chat_request& req) {
     nlohmann::json payload;
     const std::string model = req.model.empty() ? default_model(req.provider) : req.model;
@@ -142,7 +239,9 @@ nlohmann::json build_payload(const chat_request& req) {
         // All three speak the OpenAI Chat Completions wire format.
         payload["model"]    = model;
         payload["messages"] = build_openai_messages(req);
-        payload["temperature"]           = req.temperature;
+        if (model_supports_temperature(req.provider, model)) {
+            payload["temperature"] = req.temperature;
+        }
         payload["max_completion_tokens"] = req.max_tokens;
         break;
     }

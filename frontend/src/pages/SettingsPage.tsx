@@ -235,12 +235,35 @@ export function SettingsPage() {
           </select>
         </div>
         <div className="field" style={{ flex: 1 }}>
-          <label>Model (blank = server default)</label>
-          <input
-            placeholder={config?.providers.find((p) => p.id === settings.provider)?.default_model}
-            value={settings.model}
+          <label>Model</label>
+          <select
+            value={settings.model || (config?.providers.find((p) => p.id === settings.provider)?.default_model ?? '')}
             onChange={(e) => settingsChange('model', e.target.value)}
-          />
+            disabled={!config}
+          >
+            {(() => {
+              const prov = config?.providers.find((p) => p.id === settings.provider);
+              const models = prov?.models ?? [];
+              const saved = settings.model;
+              // If the user has a saved model that's no longer in the curated
+              // list, surface it as a (legacy) option so we don't silently
+              // change the selection underneath them.
+              const has_saved = saved && models.some((m) => m.id === saved);
+              return (
+                <>
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}{m.vision ? '' : ' · text-only'}
+                      {m.id === prov?.default_model ? ' · default' : ''}
+                    </option>
+                  ))}
+                  {saved && !has_saved && (
+                    <option value={saved}>{saved} · (legacy / custom)</option>
+                  )}
+                </>
+              );
+            })()}
+          </select>
         </div>
       </div>
       <div className="row">

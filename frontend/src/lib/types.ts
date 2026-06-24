@@ -6,6 +6,12 @@ export const MODES: Mode[] = ['general', 'coding', 'behavioral', 'system_design'
 export type ProviderId = 'openai' | 'anthropic' | 'deepseek' | 'mistral';
 export const PROVIDER_IDS: ProviderId[] = ['openai', 'anthropic', 'deepseek', 'mistral'];
 
+export interface ModelInfo {
+  id: string;
+  label: string;
+  vision: boolean;
+}
+
 export interface ProviderInfo {
   id: ProviderId;
   default_model: string;
@@ -15,6 +21,8 @@ export interface ProviderInfo {
    * the correct Authorization: Bearer token.
    */
   has_key: boolean;
+  /** Curated dropdown options surfaced by the backend. */
+  models: ModelInfo[];
 }
 
 export interface ServerConfig {

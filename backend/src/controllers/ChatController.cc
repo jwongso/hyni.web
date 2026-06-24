@@ -223,6 +223,16 @@ void ChatController::getConfig(const drogon::HttpRequestPtr& req,
         // for THIS request: only true if the request is owner-authorised (or
         // open mode is in effect).
         entry["has_key"]       = owner && !api_key_for(p).empty();
+        // Curated model catalogue — frontend renders as a dropdown.
+        json models = json::array();
+        for (const auto& m : hyni::list_models(p)) {
+            models.push_back({
+                {"id", m.id},
+                {"label", m.label},
+                {"vision", m.vision},
+            });
+        }
+        entry["models"] = std::move(models);
         body["providers"].push_back(std::move(entry));
     };
     add(hyni::API_PROVIDER::OpenAI);
