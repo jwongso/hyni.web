@@ -201,8 +201,17 @@ export function SettingsPage() {
       <div className="field">
         <label>Additional notes</label>
         <textarea
-          rows={5}
-          placeholder="Anything the LLM should know: strengths, weaknesses, motivations, salary expectations, hobbies, etc."
+          rows={6}
+          placeholder={
+            'Anything the LLM should know — strengths, weaknesses, ' +
+            'motivations, salary expectations, hobbies, etc.\n\n' +
+            'Conditional rules per mode also work (the LLM sees the mode in ' +
+            'its system prompt). For example:\n' +
+            '  - For coding mode, prefer Python 3.12 and async/await.\n' +
+            '  - For behavioral mode, lean into stories from my SAP years.\n' +
+            '  - For system design, always discuss multi-region failover.\n' +
+            '  - Always reply in British English.'
+          }
           value={profile.extra_notes}
           onChange={profileChange('extra_notes')}
         />
