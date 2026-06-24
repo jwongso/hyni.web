@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { fetchConfig, probeProviderKey } from '../lib/api';
 import { storage } from '../lib/storage';
 import { isPdfFile, pdfToText } from '../lib/pdf';
@@ -10,25 +10,20 @@ import {
   type AppSettings,
   type ProviderId,
   type ServerConfig,
-  type SttEngineId,
-  type TtsEngineId,
   type UserProfile,
 } from '../lib/types';
-import { createRecognizer, listAdapters } from '../stt/registry';
-import { listSpeakers } from '../tts/registry';
 import { useSpeaker } from '../tts/useSpeaker';
 
 // Settings page — owns:
 //   • Identity context (target role, resume from PDF/text, strengths, ...)
 //   • LLM provider + model + sampling
 //   • Per-provider local API keys (BYOK) + owner-token for shared deployments
-//   • STT engine picker (auto-downloads model on select if needed)
-//   • TTS engine picker + voice list + rate/pitch + speak toggle
+//   • TTS voice + rate/pitch + speak toggle (engine itself is fixed to
+//     Web Speech for now; the STT/TTS abstractions still live in stt/ + tts/
+//     so swapping later is a one-file change).
 //   • Response streaming toggle
 //
-// Everything is persisted to localStorage via `storage`. A "Save" button
-// commits the in-memory draft to localStorage; "Reset all" wipes both
-// profile and settings back to defaults.
+// Everything is persisted to localStorage via `storage`.
 export function SettingsPage() {
   const [profile,  setProfile]   = useState<UserProfile>(() => storage.loadProfile());
   const [settings, setSettings]  = useState<AppSettings>(() => storage.loadSettings());
@@ -38,7 +33,6 @@ export function SettingsPage() {
   const [keyShow,  setKeyShow]   = useState<Record<string, boolean>>({});
   const [showOwner, setShowOwner] = useState(false);
   const [probe,    setProbe]     = useState<Record<string, string>>({});
-  const [sttDl,    setSttDl]     = useState<string>('');
 
   useEffect(() => {
     fetchConfig().then(setConfig).catch(() => {});
@@ -53,39 +47,7 @@ export function SettingsPage() {
     fetchConfig().then(setConfig).catch(() => {});
   }, [settings.owner_token]);
 
-  // ---------------------------------------------------------------------------
-  // STT model download — when the user picks a model-needing engine, kick off
-  // its init() so the model is fetched + cached in IndexedDB. We never call
-  // start(), so no mic permission prompt is triggered.
-  // ---------------------------------------------------------------------------
-  useEffect(() => {
-    const meta = listAdapters().find((m) => m.id === settings.stt_engine);
-    if (!meta || !meta.capabilities.needsModelDownload) {
-      setSttDl('');
-      return;
-    }
-    if (!meta.isAvailable()) {
-      setSttDl(`Not available: ${meta.unavailableReason?.() ?? 'unsupported'}`);
-      return;
-    }
-    let cancelled = false;
-    const rec = createRecognizer(settings.stt_engine);
-    rec.setHandlers({
-      onStatus: (_state, msg) => {
-        if (cancelled) return;
-        if (msg) setSttDl(msg);
-      },
-      onError: (msg) => { if (!cancelled) setSttDl(`Error: ${msg}`); },
-    });
-    setSttDl('priming model…');
-    rec.init()
-      .then(() => { if (!cancelled) setSttDl('Model ready ✓ (cached for offline)'); })
-      .catch((e: any) => { if (!cancelled) setSttDl(`Error: ${e?.message ?? e}`); })
-      .finally(() => { try { rec.dispose(); } catch { /* ignore */ } });
-    return () => { cancelled = true; try { rec.dispose(); } catch { /* ignore */ } };
-  }, [settings.stt_engine]);
-
-  // TTS hook — voice list lives here.
+  // TTS hook — supplies the voice list for the picker below.
   const tts = useSpeaker(settings.tts_engine);
 
   // ---------------------------------------------------------------------------
@@ -170,10 +132,6 @@ export function SettingsPage() {
   // ---------------------------------------------------------------------------
   // Derived
   // ---------------------------------------------------------------------------
-  const sttMetas        = useMemo(() => listAdapters(), []);
-  const ttsMetas        = useMemo(() => listSpeakers(), []);
-  const currentStt      = sttMetas.find((m) => m.id === settings.stt_engine);
-  const currentTts      = ttsMetas.find((m) => m.id === settings.tts_engine);
   const ownerModeServer = config?.owner_mode_enabled ?? false;
   const isOwner         = config?.is_owner ?? !ownerModeServer;
 
@@ -358,58 +316,9 @@ export function SettingsPage() {
         </>
       )}
 
-      {/* ===== STT engine =========================================== */}
-      <h2>Speech-to-Text</h2>
-      <div className="field">
-        <label>Engine</label>
-        <select
-          value={settings.stt_engine}
-          onChange={(e) => settingsChange('stt_engine', e.target.value as SttEngineId)}
-        >
-          {sttMetas.map((m) => {
-            const ok = m.isAvailable();
-            const tag = m.capabilities.offline ? 'local' : 'cloud';
-            return (
-              <option key={m.id} value={m.id} disabled={!ok}>
-                {m.label} · {tag}{ok ? '' : ' — unavailable'}
-              </option>
-            );
-          })}
-        </select>
-        {currentStt && (
-          <small>
-            {currentStt.description}
-            {currentStt.capabilities.needsModelDownload && (
-              <> Model: ~{currentStt.capabilities.modelSizeMb} MB.</>
-            )}
-          </small>
-        )}
-        {sttDl && (
-          <div className="status-pill" style={{ marginTop: '0.4rem' }}>{sttDl}</div>
-        )}
-      </div>
-
-      {/* ===== TTS engine =========================================== */}
-      <h2>Text-to-Speech</h2>
+      {/* ===== Voice ================================================ */}
+      <h2>Voice <small style={{ color: 'var(--muted)' }}>(Web Speech API)</small></h2>
       <div className="row">
-        <div className="field" style={{ flex: 1 }}>
-          <label>Engine</label>
-          <select
-            value={settings.tts_engine}
-            onChange={(e) => settingsChange('tts_engine', e.target.value as TtsEngineId)}
-          >
-            {ttsMetas.map((m) => {
-              const ok = m.isAvailable();
-              const qual = m.capabilities.voiceQuality;
-              return (
-                <option key={m.id} value={m.id} disabled={!ok}>
-                  {m.label}{qual !== 'system' ? ` · ${qual}` : ''}{ok ? '' : ' — unavailable'}
-                </option>
-              );
-            })}
-          </select>
-          {currentTts && <small>{currentTts.description}</small>}
-        </div>
         <div className="field" style={{ flex: 2 }}>
           <label>Voice ({tts.voices.length} available)</label>
           <select
@@ -422,8 +331,6 @@ export function SettingsPage() {
             ))}
           </select>
         </div>
-      </div>
-      <div className="row">
         <div className="field" style={{ flex: 1 }}>
           <label>Rate ({settings.tts_rate.toFixed(2)}x)</label>
           <input type="range" min={0.5} max={2} step={0.05}
@@ -436,6 +343,8 @@ export function SettingsPage() {
                  value={settings.tts_pitch}
                  onChange={(e) => settingsChange('tts_pitch', Number(e.target.value))} />
         </div>
+      </div>
+      <div className="row">
         <div className="field" style={{ flex: 1 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <input
@@ -450,7 +359,7 @@ export function SettingsPage() {
         <button className="secondary" type="button"
           disabled={tts.isSpeaking || tts.state !== 'ready'}
           onClick={() => void tts.speak(
-            "Hello. This is a quick voice preview from your selected text-to-speech engine.",
+            "Hello. This is a quick voice preview from your selected voice.",
             { voiceId: settings.tts_voice_uri, rate: settings.tts_rate, pitch: settings.tts_pitch })}>
           ▶ Preview voice
         </button>
