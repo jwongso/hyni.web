@@ -1,3 +1,9 @@
+// Tiny typed wrapper around localStorage.
+//
+// All keys are namespaced under `hyni:` to avoid collisions with other apps
+// on the same origin. Accessors return safe defaults on missing / malformed
+// values, repairing the entry in the process.
+
 import {
   DEFAULT_SETTINGS,
   EMPTY_PROFILE,
@@ -13,6 +19,8 @@ function readJSON<T extends object>(key: string, fallback: T): T {
     const raw = localStorage.getItem(key);
     if (raw == null) return fallback;
     const parsed = JSON.parse(raw) as Partial<T>;
+    // Shallow merge so newly-added fields in `fallback` show up on old
+    // settings blobs without losing the user's existing values.
     return { ...fallback, ...parsed };
   } catch {
     localStorage.removeItem(key);
@@ -32,7 +40,11 @@ export const storage = {
     writeJSON(PROFILE_KEY, p);
   },
   loadSettings(): AppSettings {
-    return readJSON<AppSettings>(SETTINGS_KEY, DEFAULT_SETTINGS);
+    const s = readJSON<AppSettings>(SETTINGS_KEY, DEFAULT_SETTINGS);
+    // Defensive: ensure nested api_keys bag is well-formed even if an old
+    // blob is missing it.
+    s.api_keys = { ...DEFAULT_SETTINGS.api_keys, ...(s.api_keys ?? {}) };
+    return s;
   },
   saveSettings(s: AppSettings) {
     writeJSON(SETTINGS_KEY, s);

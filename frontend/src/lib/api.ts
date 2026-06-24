@@ -1,11 +1,28 @@
+// HTTP client for the Drogon backend.
+//
+// Every request optionally carries an `Authorization: Bearer <owner_token>`
+// header. The backend ignores it in open mode (HYNI_OWNER_TOKEN unset) and
+// validates it otherwise. Per-provider API keys go in the JSON body of
+// /api/chat[/stream] and are never sent in headers.
+
 import type {
   ChatRequestBody,
   ChatResponseBody,
   ServerConfig,
 } from './types';
+import { storage } from './storage';
+
+function ownerAuthHeader(): Record<string, string> {
+  try {
+    const t = storage.loadSettings().owner_token?.trim();
+    return t ? { Authorization: `Bearer ${t}` } : {};
+  } catch { return {}; }
+}
 
 export async function fetchConfig(): Promise<ServerConfig> {
-  const res = await fetch('/api/config');
+  const res = await fetch('/api/config', {
+    headers: { ...ownerAuthHeader() },
+  });
   if (!res.ok) throw new Error(`config: HTTP ${res.status}`);
   return res.json();
 }
@@ -13,28 +30,19 @@ export async function fetchConfig(): Promise<ServerConfig> {
 export async function postChat(body: ChatRequestBody): Promise<ChatResponseBody> {
   const res = await fetch('/api/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...ownerAuthHeader(),
+    },
     body: JSON.stringify(body),
   });
-  // The Drogon controller always returns a JSON body, even on failure.
   return res.json();
 }
 
 // -----------------------------------------------------------------------------
-// Streaming
-//
-// Server emits one SSE frame per delta plus a final frame with `done: true`:
-//   data: {"delta":"Hello"}
-//
-//   data: {"delta":" world"}
-//
-//   data: {"done":true,"success":true,"latency_ms":1234,"usage":{...}}
-//
-// We consume the response body as a ReadableStream, split on the blank-line
-// frame terminator (\n\n), and dispatch parsed JSON to the caller's handlers.
+// Streaming variant
 // -----------------------------------------------------------------------------
 
-export interface ChatStreamDelta { delta: string }
 export interface ChatStreamDone {
   done: true;
   success: boolean;
@@ -48,7 +56,7 @@ export interface ChatStreamHandlers {
   onDelta(text: string): void;
   onDone(final: ChatStreamDone): void;
   onError(message: string): void;
-  /** Optional AbortSignal — abort the underlying fetch to cancel the stream. */
+  /** Abort signal: cancels the underlying fetch, which aborts the LLM call. */
   signal?: AbortSignal;
 }
 
@@ -63,6 +71,7 @@ export async function postChatStream(
       headers: {
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
+        ...ownerAuthHeader(),
       },
       body: JSON.stringify(body),
       signal: h.signal,
@@ -72,7 +81,6 @@ export async function postChatStream(
     return;
   }
 
-  // Drogon returns JSON on early validation failures (no SSE body).
   const ct = res.headers.get('content-type') ?? '';
   if (!res.ok || !ct.includes('text/event-stream')) {
     try {
@@ -84,10 +92,7 @@ export async function postChatStream(
     return;
   }
 
-  if (!res.body) {
-    h.onError('streaming response had no body');
-    return;
-  }
+  if (!res.body) { h.onError('streaming response had no body'); return; }
 
   const reader  = res.body.getReader();
   const decoder = new TextDecoder('utf-8');
@@ -99,19 +104,16 @@ export async function postChatStream(
       if (done) break;
       buf += decoder.decode(value, { stream: true });
 
-      // Pull complete \n\n-terminated frames from the buffer.
       while (true) {
         const sep = buf.indexOf('\n\n');
         if (sep < 0) break;
         const frame = buf.slice(0, sep);
         buf = buf.slice(sep + 2);
 
-        // Each frame can have multiple "field: value" lines. We only care
-        // about `data:` lines; concatenate their values with '\n'.
         let dataPayload = '';
         for (const rawLine of frame.split('\n')) {
-          if (!rawLine || rawLine.startsWith(':')) continue;          // blank / comment
-          if (!rawLine.startsWith('data:')) continue;                  // event:, id:, etc.
+          if (!rawLine || rawLine.startsWith(':')) continue;
+          if (!rawLine.startsWith('data:')) continue;
           const v = rawLine.slice(5).replace(/^ /, '');
           dataPayload += (dataPayload ? '\n' : '') + v;
         }
@@ -131,9 +133,29 @@ export async function postChatStream(
       }
     }
   } catch (e: any) {
-    if (e?.name === 'AbortError') return;  // expected on user cancel
+    if (e?.name === 'AbortError') return;
     h.onError(e?.message ?? String(e));
   } finally {
     try { reader.releaseLock(); } catch { /* ignore */ }
   }
+}
+
+/**
+ * Tiny "probe" request used by the Settings page "Test" buttons.
+ * Sends a 1-token request to verify the (provider, key) combination works.
+ */
+export async function probeProviderKey(
+  provider: 'openai' | 'anthropic' | 'deepseek' | 'mistral',
+  apiKey: string,
+): Promise<ChatResponseBody> {
+  return postChat({
+    provider,
+    mode: 'general',
+    profile: { resume_text: '', target_role: '', strengths: '', weaknesses: '', extra_notes: '' },
+    history: [],
+    message: 'ping',
+    max_tokens: 1,
+    temperature: 0,
+    api_key: apiKey,
+  });
 }

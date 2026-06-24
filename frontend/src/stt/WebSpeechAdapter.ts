@@ -1,44 +1,105 @@
-// Web Speech API adapter.
+// Web Speech API adapter — browser-native cloud STT.
 //
-// Free, zero-setup, no API key. Works in Chrome / Edge / Safari. Firefox does
-// not support SpeechRecognition.
+// Chrome / Edge / Safari ship a SpeechRecognition implementation. On Chrome
+// the audio is sent to Google's cloud recognizer. Firefox does NOT implement
+// SpeechRecognition. We require a secure context (https:// or http://localhost)
+// for the underlying getUserMedia call.
 //
-// We use continuous + interim-results mode and accumulate the final segments
-// in the buffer the chat page maintains. We auto-restart on browser-imposed
-// silence stops so the recognizer behaves as a true streaming source.
+// Permission UX: instead of letting SpeechRecognition.start() silently
+// trigger the permission dialog with an opaque "not-allowed" error, we
+// pre-request the microphone via getUserMedia for a clear, actionable
+// permission prompt + friendlier error mapping.
 
-import type { SpeechRecognizer, SttEngineId } from './types';
+import type {
+  RecognizerHandlers,
+  RecognizerState,
+  SpeechRecognizer,
+  SttEngineId,
+} from './types';
+import { registerAdapter } from './registry';
 
-// The standard / vendor-prefixed constructor.
+// Vendor-prefixed constructor probe.
 const SpeechRecognitionImpl: any =
   (typeof window !== 'undefined' &&
     ((window as any).SpeechRecognition ||
      (window as any).webkitSpeechRecognition)) ||
   null;
 
-export function isWebSpeechAvailable(): boolean {
+function isAvailable(): boolean {
   return !!SpeechRecognitionImpl;
 }
 
-export class WebSpeechAdapter implements SpeechRecognizer {
-  readonly id: SttEngineId = 'webspeech';
-  onResult: SpeechRecognizer['onResult'] = null;
-  onError:  SpeechRecognizer['onError']  = null;
-  onStatus: SpeechRecognizer['onStatus'] = null;
+async function ensureMicPermission(): Promise<void> {
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+    throw new Error(
+      'Microphone API not available. Are you on a secure context ' +
+      '(https:// or http://localhost)?');
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    for (const t of stream.getTracks()) t.stop();
+  } catch (e: any) {
+    const name = e?.name ?? 'Error';
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      throw new Error(
+        'Microphone permission was denied. Click the 🎙 icon in the address bar ' +
+        'and allow microphone access for this site, then try again.');
+    }
+    if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+      throw new Error('No microphone detected. Check your input device in system settings.');
+    }
+    if (name === 'NotReadableError') {
+      throw new Error('Microphone is busy. Close other tabs / apps using the mic and retry.');
+    }
+    throw new Error(`Microphone access failed: ${name}${e?.message ? ' — ' + e.message : ''}`);
+  }
+}
 
+function friendlyRecognitionError(code: string): string {
+  switch (code) {
+    case 'not-allowed':
+    case 'service-not-allowed':
+      return 'Microphone permission denied for this site.';
+    case 'audio-capture':
+      return 'No microphone detected.';
+    case 'network':
+      return 'Web Speech failed to reach its cloud recognizer (network error).';
+    case 'language-not-supported':
+      return 'Browser does not support speech recognition for the current language.';
+    default:
+      return `Web Speech error: ${code}`;
+  }
+}
+
+class WebSpeechAdapter implements SpeechRecognizer {
+  readonly id: SttEngineId = 'webspeech';
+  private handlers: RecognizerHandlers = {};
   private rec: any = null;
-  private want_running = false;
+  private permissionOk = false;
+  private wantRunning = false;
   private running = false;
 
+  setHandlers(h: RecognizerHandlers): void { this.handlers = h; }
+
+  private emit(state: RecognizerState, msg?: string): void {
+    this.handlers.onStatus?.(state, msg);
+  }
+
   async init(): Promise<void> {
-    if (!isWebSpeechAvailable()) {
-      throw new Error('Web Speech API is not available in this browser.');
+    if (!isAvailable()) {
+      throw new Error('Web Speech API is not available in this browser. Try Chrome / Edge / Safari.');
     }
-    if (this.rec) return;
+    if (!this.permissionOk) {
+      this.emit('initializing', 'requesting microphone permission…');
+      await ensureMicPermission();
+      this.permissionOk = true;
+    }
+    if (this.rec) { this.emit('ready'); return; }
+
     const rec = new SpeechRecognitionImpl();
-    rec.continuous       = true;
-    rec.interimResults   = true;
-    rec.lang             = navigator.language || 'en-US';
+    rec.continuous     = true;
+    rec.interimResults = true;
+    rec.lang           = navigator.language || 'en-US';
 
     rec.onresult = (event: any) => {
       let finalText = '';
@@ -49,62 +110,87 @@ export class WebSpeechAdapter implements SpeechRecognizer {
         if (r.isFinal) finalText += t;
         else           interimText += t;
       }
-      if (finalText && this.onResult) this.onResult(finalText, true);
-      if (interimText && this.onResult) this.onResult(interimText, false);
+      if (finalText)   this.handlers.onResult?.(finalText,   true);
+      if (interimText) this.handlers.onResult?.(interimText, false);
     };
 
     rec.onerror = (event: any) => {
-      const msg = event.error || 'unknown error';
-      // 'no-speech' fires constantly when the user is quiet — ignore.
-      if (msg === 'no-speech' || msg === 'aborted') return;
-      this.onError?.(`Web Speech error: ${msg}`);
+      const code = event.error || 'unknown';
+      if (code === 'no-speech' || code === 'aborted') return;
+      if (code === 'not-allowed' || code === 'service-not-allowed') {
+        this.permissionOk = false;
+        this.wantRunning = false;
+      }
+      this.handlers.onError?.(friendlyRecognitionError(code));
     };
 
     rec.onend = () => {
       this.running = false;
-      // Browsers auto-stop after silence. Restart to keep streaming.
-      if (this.want_running) {
+      if (this.wantRunning) {
         try { rec.start(); this.running = true; }
-        catch (e: any) { this.onError?.(`restart failed: ${e?.message ?? e}`); }
+        catch (e: any) { this.handlers.onError?.('restart failed: ' + (e?.message ?? e)); }
       } else {
-        this.onStatus?.('stopped');
+        this.emit('stopped');
       }
     };
 
     rec.onstart = () => {
       this.running = true;
-      this.onStatus?.('listening');
+      this.emit('listening', 'cloud (browser-native)');
     };
 
     this.rec = rec;
+    this.emit('ready');
   }
 
   async start(): Promise<void> {
     await this.init();
-    this.want_running = true;
+    this.wantRunning = true;
     if (!this.running) {
       try { this.rec.start(); }
       catch (e: any) {
-        // 'InvalidStateError' if already started — safe to ignore.
-        if (!(e?.name === 'InvalidStateError')) throw e;
+        if (e?.name !== 'InvalidStateError') throw e;
       }
     }
   }
 
   async stop(): Promise<void> {
-    this.want_running = false;
+    this.wantRunning = false;
     if (this.rec && this.running) {
       try { this.rec.stop(); } catch { /* ignore */ }
     }
   }
 
   dispose(): void {
-    this.want_running = false;
+    this.wantRunning = false;
     if (this.rec) {
       try { this.rec.abort(); } catch { /* ignore */ }
       this.rec = null;
     }
+    this.running = false;
   }
 
   isRunning(): boolean { return this.running; }
 }
+
+registerAdapter({
+  meta: {
+    id: 'webspeech',
+    label: 'Web Speech (browser cloud)',
+    description:
+      'Browser-native SpeechRecognition. Zero setup, instant streaming. ' +
+      'Audio leaves your machine — Chrome routes it to Google. ' +
+      'Chrome / Edge / Safari only; Firefox is not supported.',
+    capabilities: {
+      interim: true,
+      offline: false,
+      cloud:   true,
+      needsModelDownload: false,
+      modelSizeMb: 0,
+    },
+    isAvailable,
+    unavailableReason: () => isAvailable() ? undefined :
+      'Browser does not implement window.SpeechRecognition.',
+  },
+  create: () => new WebSpeechAdapter(),
+});

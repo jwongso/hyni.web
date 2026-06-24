@@ -1,0 +1,25 @@
+<!--
+  hyni mark — purple rounded chip + lowercase 'h' + ascending dots
+  (speech wave). Single SVG file used for:
+    - favicon (browser tab)
+    - apple-touch-icon
+    - inline header brand in the React SPA
+  Drogon serves this file at /favicon.svg from public/favicon.svg.
+-->
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="hyni">
+  <defs>
+    <linearGradient id="hynibg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#a78bfa"/>
+      <stop offset="100%" stop-color="#6d28d9"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#hynibg)"/>
+  <text x="32" y="47"
+        font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Inter, sans-serif"
+        font-size="44" font-weight="800" fill="#ffffff"
+        text-anchor="middle" letter-spacing="-2">h</text>
+  <!-- ascending sound-wave dots, top-right corner -->
+  <circle cx="46" cy="14" r="2.4" fill="#ffffff" opacity="0.95"/>
+  <circle cx="52" cy="20" r="1.9" fill="#ffffff" opacity="0.65"/>
+  <circle cx="58" cy="26" r="1.4" fill="#ffffff" opacity="0.45"/>
+</svg>

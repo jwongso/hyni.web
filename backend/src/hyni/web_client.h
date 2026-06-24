@@ -20,6 +20,13 @@ struct chat_request {
     double temperature = 0.7;
     int max_tokens = 4096;
     int timeout_seconds = 90;
+    /**
+     * Optional client-supplied API key (from the frontend's Settings page
+     * localStorage). When set, takes precedence over server-side env vars.
+     * Lives only on the request — never logged, never persisted on the
+     * server.
+     */
+    std::string client_api_key;
 };
 
 struct chat_result {

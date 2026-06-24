@@ -29,6 +29,57 @@ std::string api_key_for(hyni::API_PROVIDER p) {
     }
 }
 
+// Constant-time string comparison so a timing side-channel cannot leak the
+// owner token character-by-character. Only relevant if hyni is exposed to
+// the public internet (Cloudflare Tunnel), but cheap to do right.
+bool ct_equal(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    unsigned int diff = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        diff |= static_cast<unsigned char>(a[i]) ^ static_cast<unsigned char>(b[i]);
+    }
+    return diff == 0;
+}
+
+// Pull the bearer token (if any) out of the Authorization header.
+std::string bearer_token(const drogon::HttpRequestPtr& req) {
+    const auto& auth = req->getHeader("authorization");
+    if (auth.size() < 7) return "";
+    if (auth.compare(0, 7, "Bearer ") != 0 && auth.compare(0, 7, "bearer ") != 0) return "";
+    return auth.substr(7);
+}
+
+bool is_owner(const drogon::HttpRequestPtr& req) {
+    const std::string expected = getenv_str("HYNI_OWNER_TOKEN");
+    if (expected.empty()) return true;          // open mode → everyone is "owner"
+    const std::string supplied = bearer_token(req);
+    if (supplied.empty()) return false;
+    return ct_equal(expected, supplied);
+}
+
+bool owner_mode_enabled() {
+    return !getenv_str("HYNI_OWNER_TOKEN").empty();
+}
+
+// Pick the API key to use for a single request.
+//   1. client_api_key (from request body) is always allowed and wins
+//   2. otherwise, server env var IF the request is owner (or open mode)
+//   3. otherwise, empty string (caller rejects with 402)
+struct key_choice {
+    std::string key;
+    std::string source;   // "client" | "server" | "" if none
+};
+
+key_choice resolve_api_key(const hyni::chat_request& cr,
+                           const drogon::HttpRequestPtr& req) {
+    if (!cr.client_api_key.empty()) return {cr.client_api_key, "client"};
+    if (is_owner(req)) {
+        const std::string server_key = api_key_for(cr.provider);
+        if (!server_key.empty()) return {server_key, "server"};
+    }
+    return {"", ""};
+}
+
 drogon::HttpResponsePtr json_response(const json& body, HttpStatusCode code = drogon::k200OK) {
     auto resp = HttpResponse::newHttpResponse();
     resp->setStatusCode(code);
@@ -140,6 +191,7 @@ bool parse_chat_request(const std::string& body,
     out.user_message = get_str(root, "message");
     out.temperature  = get_double(root, "temperature", 0.7);
     out.max_tokens   = get_int(root,    "max_tokens", 4096);
+    out.client_api_key = get_str(root, "api_key");
 
     simdjson::ondemand::value profile_val;
     if (root["profile"].get(profile_val) == simdjson::SUCCESS) {
@@ -158,16 +210,21 @@ bool parse_chat_request(const std::string& body,
 
 } // namespace
 
-void ChatController::getConfig(const drogon::HttpRequestPtr& /*req*/,
+void ChatController::getConfig(const drogon::HttpRequestPtr& req,
                                std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+    const bool owner_mode = owner_mode_enabled();
+    const bool owner      = is_owner(req);
+
     json body;
     body["providers"] = json::array();
-
     auto add = [&](hyni::API_PROVIDER p) {
         json entry;
         entry["id"]            = hyni::provider_to_str(p);
         entry["default_model"] = hyni::default_model(p);
-        entry["has_key"]       = !api_key_for(p).empty();
+        // `has_key` reflects the EFFECTIVE availability of a server-side key
+        // for THIS request: only true if the request is owner-authorised (or
+        // open mode is in effect).
+        entry["has_key"]       = owner && !api_key_for(p).empty();
         body["providers"].push_back(std::move(entry));
     };
     add(hyni::API_PROVIDER::OpenAI);
@@ -175,7 +232,9 @@ void ChatController::getConfig(const drogon::HttpRequestPtr& /*req*/,
     add(hyni::API_PROVIDER::DeepSeek);
     add(hyni::API_PROVIDER::Mistral);
 
-    body["modes"] = {"general", "coding", "behavioral"};
+    body["modes"]              = {"general", "coding", "behavioral"};
+    body["owner_mode_enabled"] = owner_mode;
+    body["is_owner"]           = owner;
     callback(json_response(body));
 }
 
@@ -197,14 +256,19 @@ void ChatController::postChat(const drogon::HttpRequestPtr& req,
         return;
     }
 
-    const std::string api_key = api_key_for(cr.provider);
-    if (api_key.empty()) {
-        callback(error_response(
-            "No API key configured for provider " + hyni::provider_to_str(cr.provider) +
-                ". Set the corresponding *_API_KEY environment variable.",
-            drogon::k400BadRequest));
+    const auto key_pick = resolve_api_key(cr, req);
+    if (key_pick.key.empty()) {
+        const std::string msg = owner_mode_enabled()
+            ? "This deployment requires you to supply your own API key. Open "
+              "Settings, add a key for '" + hyni::provider_to_str(cr.provider) +
+              "', and try again. (Or enter the owner token if you have one.)"
+            : "No API key configured for provider " + hyni::provider_to_str(cr.provider) +
+              ". Set the corresponding *_API_KEY environment variable or send "
+              "an `api_key` field in the request body.";
+        callback(error_response(msg, drogon::k402PaymentRequired));
         return;
     }
+    const std::string api_key = key_pick.key;
 
     // Run blocking libcurl call off the event loop thread.
     drogon::app().getIOLoop(0)->queueInLoop([cr, api_key, callback = std::move(callback)]() mutable {
@@ -242,13 +306,16 @@ void ChatController::postChatStream(const drogon::HttpRequestPtr& req,
         callback(error_response("message or images required", drogon::k400BadRequest));
         return;
     }
-    const std::string api_key = api_key_for(cr.provider);
-    if (api_key.empty()) {
-        callback(error_response(
-            "No API key configured for provider " + hyni::provider_to_str(cr.provider),
-            drogon::k400BadRequest));
+
+    const auto key_pick = resolve_api_key(cr, req);
+    if (key_pick.key.empty()) {
+        const std::string msg = owner_mode_enabled()
+            ? "This deployment requires you to supply your own API key in Settings."
+            : "No API key configured for provider " + hyni::provider_to_str(cr.provider);
+        callback(error_response(msg, drogon::k402PaymentRequired));
         return;
     }
+    const std::string api_key = key_pick.key;
 
     // Async streaming response: Drogon sends Transfer-Encoding: chunked and
     // gives us a ResponseStreamPtr (unique_ptr). We need to forward it through

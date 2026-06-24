@@ -50,3 +50,9 @@ cloudflared/cert.pem
 
 # --- Frontend production build output (Vite -> ../public/app/) -------------
 public/app/
+
+# --- Optional locally-cached Whisper / VAD model weights (huge binaries) ----
+# Populate via `scripts/fetch-models.sh`. The wstream adapter falls back to
+# huggingface.co at runtime if these are absent, so the app still works
+# without them on a clean checkout.
+public/wstream/models/

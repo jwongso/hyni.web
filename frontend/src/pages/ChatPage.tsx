@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChatMessages } from '../components/ChatMessages';
 import { ImageDropZone } from '../components/ImageDropZone';
 import { ModeToggle } from '../components/ModeToggle';
-import { postChat, postChatStream } from '../lib/api';
+import { fetchConfig, postChat, postChatStream } from '../lib/api';
 import { storage } from '../lib/storage';
 import type {
   AppSettings,
@@ -11,26 +11,28 @@ import type {
   Mode,
   ServerConfig,
 } from '../lib/types';
-import { fetchConfig } from '../lib/api';
-import { createRecognizer } from '../stt';
-import type { SpeechRecognizer } from '../stt/types';
-import { cancelSpeech, speak } from '../tts/webspeech';
+import { useSpeechRecognizer } from '../stt/useSpeechRecognizer';
+import { useSpeaker } from '../tts/useSpeaker';
 
 // The main interview-practice page.
 //
-// Lifecycle:
-//   - Mounting loads the user's profile + settings from localStorage and the
-//     server config (which provider keys are configured) from /api/config.
-//   - "Start listening" instantiates the chosen STT adapter. Partial
-//     transcripts replace the working buffer; final ones append.
+// STT and TTS engines are configured in the Settings page (saved into
+// localStorage). The chat page reads them on mount and re-binds via
+// useSpeechRecognizer / useSpeaker hooks — both of which transparently
+// dispose the prior engine when the selection changes, so flipping
+// engines in Settings + revisiting Chat just works.
+//
+// Session UX:
+//   - "🎙 Start listening" engages the chosen STT.
+//   - Partial transcripts replace the working buffer; final ones append.
 //   - Pressing `s` (when no input/textarea has focus) flushes the buffer:
-//     it becomes a new user message in `history`, the request goes to
-//     /api/chat, and the assistant's reply is appended + spoken via TTS.
+//     it becomes a new user message, the request goes to /api/chat[/stream],
+//     and the assistant's reply is rendered and (optionally) spoken via TTS.
 //   - Drag-dropped images attach to the NEXT send and are cleared on send.
 //
-// History is fully owned by this component. It is NOT persisted across
-// reloads — interview practice sessions are ephemeral by design. (Trivial to
-// add localStorage if you ever want it.)
+// History is fully owned by this component — ephemeral by design (interview
+// practice sessions don't need persistence). Trivial to add localStorage if
+// you ever want it.
 export function ChatPage() {
   const [mode, setMode]               = useState<Mode>('general');
   const [history, setHistory]         = useState<ChatMessage[]>([]);
@@ -38,73 +40,47 @@ export function ChatPage() {
   const [interim, setInterim]         = useState('');
   const [pendingImgs, setImgs]        = useState<ImageData[]>([]);
   const [sending, setSending]         = useState(false);
-  const [streamingText, setStreaming] = useState('');         // assistant text as it arrives
-  const [status, setStatus]           = useState<string>('idle');
+  const [streamingText, setStreaming] = useState('');
   const [error, setError]             = useState<string>('');
   const [settings, setSettings]       = useState<AppSettings>(() => storage.loadSettings());
   const [profile]                     = useState(() => storage.loadProfile());
   const [config, setConfig]           = useState<ServerConfig | null>(null);
 
-  const recognizerRef = useRef<SpeechRecognizer | null>(null);
-  const messagesRef   = useRef<HTMLDivElement>(null);
-  const abortRef      = useRef<AbortController | null>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const abortRef    = useRef<AbortController | null>(null);
 
-  // Load server config once.
-  useEffect(() => {
-    fetchConfig()
-      .then(setConfig)
-      .catch(e => setError(`Could not load /api/config: ${e}`));
-  }, []);
+  // --- STT --------------------------------------------------------------
+  const stt = useSpeechRecognizer(settings.stt_engine, {
+    onResult: (text, isFinal) => {
+      if (isFinal) {
+        setBuffer((prev) => (prev ? prev + ' ' : '') + text.trim());
+        setInterim('');
+      } else {
+        setInterim(text);
+      }
+    },
+    onError: (msg) => setError(msg),
+  });
 
-  // Always reload settings on focus — the Settings page may have changed
-  // them in another tab / route.
+  // --- TTS --------------------------------------------------------------
+  const tts = useSpeaker(settings.tts_engine);
+
+  // Load server config + reload settings on focus (so Settings-page edits
+  // in another tab propagate without a manual refresh).
   useEffect(() => {
+    fetchConfig().then(setConfig).catch((e) => setError(`Could not load /api/config: ${e}`));
     const onFocus = () => setSettings(storage.loadSettings());
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, []);
 
-  // Auto-scroll chat to bottom on new messages or streaming updates.
+  // Auto-scroll on chat / streaming updates.
   useEffect(() => {
     const el = messagesRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [history, sending, streamingText]);
 
-  // Tear down the recognizer when the engine selection changes.
-  useEffect(() => {
-    return () => {
-      recognizerRef.current?.dispose();
-      recognizerRef.current = null;
-    };
-  }, [settings.stt_engine]);
-
-  const startListening = useCallback(async () => {
-    setError('');
-    let r = recognizerRef.current;
-    if (!r) {
-      r = createRecognizer(settings.stt_engine);
-      r.onResult = (text, isFinal) => {
-        if (isFinal) {
-          setBuffer(prev => (prev ? prev + ' ' : '') + text.trim());
-          setInterim('');
-        } else {
-          setInterim(text);
-        }
-      };
-      r.onError  = (m) => setError(m);
-      r.onStatus = (s) => setStatus(s);
-      recognizerRef.current = r;
-    }
-    try { await r.start(); }
-    catch (e: any) { setError(e?.message ?? String(e)); }
-  }, [settings.stt_engine]);
-
-  const stopListening = useCallback(async () => {
-    const r = recognizerRef.current;
-    if (r) await r.stop();
-    setInterim('');
-  }, []);
-
+  // --- Send -------------------------------------------------------------
   const send = useCallback(async () => {
     const text = buffer.trim();
     if (!text && pendingImgs.length === 0) return;
@@ -131,9 +107,11 @@ export function ChatPage() {
       images:      pendingImgs,
       temperature: settings.temperature,
       max_tokens:  settings.max_tokens,
+      // Per-provider local key (BYOK). When empty, backend falls back to
+      // its own env var IF the request bearer matches HYNI_OWNER_TOKEN.
+      api_key:     settings.api_keys[settings.provider] || undefined,
     };
 
-    // Rollback closure shared across both code paths.
     const rollback = (reason: string) => {
       setError(reason);
       setHistory(history);
@@ -142,7 +120,6 @@ export function ChatPage() {
     };
 
     if (settings.stream_replies) {
-      // Streaming path: render tokens as they arrive, speak full text on done.
       const ac = new AbortController();
       abortRef.current = ac;
       let assembled = '';
@@ -160,11 +137,10 @@ export function ChatPage() {
             const asst: ChatMessage = { role: 'assistant', text: assembled };
             setHistory([...nextHistory, asst]);
             if (settings.speak_replies) {
-              speak({
-                text: assembled,
-                voiceURI: settings.tts_voice_uri,
-                rate:  settings.tts_rate,
-                pitch: settings.tts_pitch,
+              void tts.speak(assembled, {
+                voiceId: settings.tts_voice_uri,
+                rate:    settings.tts_rate,
+                pitch:   settings.tts_pitch,
               });
             }
           }
@@ -182,7 +158,7 @@ export function ChatPage() {
       return;
     }
 
-    // Blocking path (fallback for benchmarking / engines that don't stream).
+    // Blocking path (fallback / when stream_replies is off in settings).
     try {
       const reply = await postChat(requestBody);
       if (!reply.success) {
@@ -191,11 +167,10 @@ export function ChatPage() {
         const asst: ChatMessage = { role: 'assistant', text: reply.content };
         setHistory([...nextHistory, asst]);
         if (settings.speak_replies) {
-          speak({
-            text: reply.content,
-            voiceURI: settings.tts_voice_uri,
-            rate:  settings.tts_rate,
-            pitch: settings.tts_pitch,
+          void tts.speak(reply.content, {
+            voiceId: settings.tts_voice_uri,
+            rate:    settings.tts_rate,
+            pitch:   settings.tts_pitch,
           });
         }
       }
@@ -204,7 +179,7 @@ export function ChatPage() {
     } finally {
       setSending(false);
     }
-  }, [buffer, pendingImgs, sending, history, settings, profile, mode]);
+  }, [buffer, pendingImgs, sending, history, settings, profile, mode, tts]);
 
   const cancelInflight = useCallback(() => {
     abortRef.current?.abort();
@@ -213,7 +188,7 @@ export function ChatPage() {
     setSending(false);
   }, []);
 
-  // Global `s` hotkey -> send. Suppressed while typing in inputs/textareas.
+  // Global `s` -> send (suppressed inside inputs / textareas).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 's' || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -227,12 +202,16 @@ export function ChatPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [send]);
 
-  // Cleanly cancel pending TTS when navigating away from the page.
-  useEffect(() => () => cancelSpeech(), []);
+  // Cancel any in-flight TTS when navigating away.
+  useEffect(() => () => tts.cancel(), [tts]);
 
-  const provider = config?.providers.find(p => p.id === settings.provider);
-  const hasKey   = provider?.has_key ?? false;
-  const isListening = recognizerRef.current?.isRunning() ?? false;
+  const provider     = config?.providers.find((p) => p.id === settings.provider);
+  const hasServerKey = provider?.has_key ?? false;
+  const hasOwnKey    = !!settings.api_keys[settings.provider];
+  const canCall      = hasServerKey || hasOwnKey;
+  const keyLabel     = hasOwnKey ? 'your key'
+                    : hasServerKey ? 'server key'
+                    : 'no key';
   const displayedBuffer = useMemo(() => {
     if (interim) return buffer ? `${buffer} ${interim}` : interim;
     return buffer;
@@ -242,16 +221,19 @@ export function ChatPage() {
     <div className="chat">
       <div className="toolbar">
         <ModeToggle value={mode} onChange={setMode} disabled={sending} />
-        <span className="status-pill">STT: {settings.stt_engine}</span>
-        <span className={'status-pill ' + (status === 'listening' ? 'ok' : '')}>{status}</span>
-        <span className={'status-pill ' + (hasKey ? 'ok' : 'warn')}>
-          {settings.provider}: {hasKey ? 'ready' : 'no key'}
+        <span className="status-pill" title="Change in Settings">STT: {settings.stt_engine}</span>
+        <span className={'status-pill ' + (stt.state === 'listening' ? 'ok' : stt.state === 'error' ? 'err' : '')}>
+          {stt.state}{stt.statusMessage ? ` — ${stt.statusMessage}` : ''}
+        </span>
+        <span className="status-pill" title="Change in Settings">TTS: {settings.tts_engine}</span>
+        <span className={'status-pill ' + (canCall ? 'ok' : 'warn')}>
+          {settings.provider}: {keyLabel}
         </span>
         <span style={{ flex: 1 }} />
-        {isListening
-          ? <button className="secondary" onClick={stopListening}>⏹ Stop listening</button>
-          : <button onClick={startListening}>🎙 Start listening</button>}
-        <button className="secondary" onClick={() => { setHistory([]); cancelSpeech(); }}>Clear</button>
+        {stt.isRunning
+          ? <button className="secondary" onClick={() => void stt.stop()}>⏹ Stop listening</button>
+          : <button onClick={() => void stt.start()}>🎙 Start listening</button>}
+        <button className="secondary" onClick={() => { setHistory([]); tts.cancel(); }}>Clear</button>
       </div>
 
       <div className="chat__messages" ref={messagesRef}>
@@ -260,7 +242,11 @@ export function ChatPage() {
           streamingText={streamingText}
           pendingAssistant={sending}
         />
-        {error && <div className="chat__msg system" style={{ color: 'var(--error)' }}>⚠ {error}</div>}
+        {(error || stt.error) && (
+          <div className="chat__msg system" style={{ color: 'var(--error)' }}>
+            ⚠ {error || stt.error}
+          </div>
+        )}
       </div>
 
       <div className="chat__input">
@@ -274,12 +260,15 @@ export function ChatPage() {
           <span className="hint">
             Press <kbd>s</kbd> to send (works while not typing).
             {settings.stream_replies ? ' Replies stream in real time.' : ' Replies wait for completion.'}
-            {!hasKey && ' Configure an API key on the backend (env var) to receive answers.'}
+            {!canCall && ' Configure an API key for ' + settings.provider + ' in Settings.'}
           </span>
           {sending && abortRef.current && (
             <button className="danger" onClick={cancelInflight}>Stop</button>
           )}
-          <button onClick={() => void send()} disabled={sending || (!buffer.trim() && pendingImgs.length === 0)}>
+          <button
+            onClick={() => void send()}
+            disabled={sending || (!buffer.trim() && pendingImgs.length === 0)}
+          >
             {sending ? 'Sending…' : 'Send (s)'}
           </button>
         </div>

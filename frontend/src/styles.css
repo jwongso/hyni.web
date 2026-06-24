@@ -77,6 +77,15 @@ textarea { resize: vertical; font-family: var(--mono); }
   font-size: 1.1rem;
   text-decoration: none;
   color: var(--accent-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+.app__logo {
+  width: 28px;
+  height: 28px;
+  display: block;
+  flex: 0 0 auto;
 }
 .app__nav { display: flex; gap: 0.25rem; }
 .app__nav-link {
@@ -134,6 +143,18 @@ textarea { resize: vertical; font-family: var(--mono); }
   padding: 0.4rem 0.85rem;
 }
 .mode-toggle button.active { background: var(--accent); color: white; }
+
+.engine-picker {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.25rem 0.45rem;
+  font-size: 0.8rem;
+  width: auto;
+  max-width: 280px;
+}
+.engine-picker:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .status-pill {
   padding: 0.15rem 0.55rem;
