@@ -256,12 +256,47 @@ textarea { resize: vertical; font-family: var(--mono); }
   height: 100%;
   width: 100%;
 }
+.chat__messages-wrap {
+  position: relative;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .chat__messages {
   overflow-y: auto;
   padding: 1rem 1.5rem;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  flex: 1;
+  min-height: 0;
+}
+.scroll-to-bottom {
+  position: absolute;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-1);
+  color: var(--fg);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.9;
+  transition: opacity 0.15s, transform 0.15s;
+  padding: 0;
+  z-index: 10;
+}
+.scroll-to-bottom:hover {
+  opacity: 1;
+  transform: translateX(-50%) translateY(-2px);
 }
 .chat__msg {
   max-width: min(85%, 820px);

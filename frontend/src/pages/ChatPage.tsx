@@ -133,10 +133,41 @@ export function ChatPage() {
     return () => window.removeEventListener('focus', onFocus);
   }, []);
 
-  // Auto-scroll on chat / streaming updates.
-  useEffect(() => {
+  // Track whether the user has scrolled away from the bottom.
+  // Using a ref so the scroll handler doesn't cause re-renders on every pixel.
+  const userScrolledRef = useRef(false);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+
+  const scrollToBottom = useCallback(() => {
     const el = messagesRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    userScrolledRef.current = false;
+    setShowScrollBtn(false);
+  }, []);
+
+  // Detect manual scroll: if the user is more than 80px from the bottom,
+  // suppress auto-scroll and show the "scroll to bottom" button.
+  const handleMessagesScroll = useCallback(() => {
+    const el = messagesRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (atBottom) {
+      userScrolledRef.current = false;
+      setShowScrollBtn(false);
+    } else {
+      userScrolledRef.current = true;
+      setShowScrollBtn(true);
+    }
+  }, []);
+
+  // Auto-scroll on chat / streaming updates — only when the user has not
+  // manually scrolled up.
+  useEffect(() => {
+    if (!userScrolledRef.current) {
+      const el = messagesRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    }
   }, [history, sending, streamingText]);
 
   // Auto-grow the composer textarea so multi-line transcripts / pasted
@@ -164,6 +195,8 @@ export function ChatPage() {
     setStreaming('');
     setReasoning('');
     setToolCalls([]);
+    userScrolledRef.current = false;
+    setShowScrollBtn(false);
 
     const userMsg: ChatMessage = { role: 'user', text, images: pendingImgs, at: Date.now() };
     const nextHistory = [...history, userMsg];
@@ -355,20 +388,27 @@ export function ChatPage() {
         <button className="secondary" onClick={() => { setHistory([]); tts.cancel(); }}>Clear</button>
       </div>
 
-      <div className="chat__messages" ref={messagesRef}>
-        <ChatMessages
-          messages={history}
-          streamingText={streamingText}
-          streamingReasoning={streamingReasoning}
-          streamingToolCalls={streamingToolCalls}
-          pendingAssistant={sending}
-          currentProvider={settings.provider}
-          currentModel={settings.model}
-        />
-        {(error || stt.error) && (
-          <div className="chat__msg system" style={{ color: 'var(--error)' }}>
-            ⚠ {error || stt.error}
-          </div>
+      <div className="chat__messages-wrap">
+        <div className="chat__messages" ref={messagesRef} onScroll={handleMessagesScroll}>
+          <ChatMessages
+            messages={history}
+            streamingText={streamingText}
+            streamingReasoning={streamingReasoning}
+            streamingToolCalls={streamingToolCalls}
+            pendingAssistant={sending}
+            currentProvider={settings.provider}
+            currentModel={settings.model}
+          />
+          {(error || stt.error) && (
+            <div className="chat__msg system" style={{ color: 'var(--error)' }}>
+              ⚠ {error || stt.error}
+            </div>
+          )}
+        </div>
+        {showScrollBtn && (
+          <button className="scroll-to-bottom" onClick={scrollToBottom} title="Scroll to bottom">
+            ↓
+          </button>
         )}
       </div>
 

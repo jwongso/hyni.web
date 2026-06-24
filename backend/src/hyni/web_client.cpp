@@ -1,6 +1,7 @@
 #include "web_client.h"
 #include "mcp_client.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <stdexcept>
@@ -115,6 +116,18 @@ bool model_supports_temperature(API_PROVIDER p, const std::string& model) {
     if (p != API_PROVIDER::OpenAI) return true;
     // gpt-5* refuses non-default temperature.
     return model.rfind("gpt-5", 0) != 0;
+}
+
+// Hard ceiling per provider — mirrors PROVIDER_TEMP in types.ts.
+// Applied server-side as a safety net even if the frontend already clamped.
+float clamp_temperature(API_PROVIDER p, float t) {
+    float max_t = 1.0f;
+    switch (p) {
+    case API_PROVIDER::DeepSeek: max_t = 1.3f; break;
+    case API_PROVIDER::Local:    max_t = 2.0f; break;
+    default:                     max_t = 1.0f; break;
+    }
+    return std::min(std::max(t, 0.0f), max_t);
 }
 
 bool provider_supports_images(API_PROVIDER p) {
@@ -284,7 +297,7 @@ nlohmann::json build_payload(const chat_request& req) {
         payload["model"]    = model;
         payload["messages"] = build_openai_messages(req);
         if (model_supports_temperature(req.provider, model)) {
-            payload["temperature"] = req.temperature;
+            payload["temperature"] = clamp_temperature(req.provider, req.temperature);
         }
         payload["max_completion_tokens"] = req.max_tokens;
         break;
@@ -295,7 +308,7 @@ nlohmann::json build_payload(const chat_request& req) {
         payload["model"]      = model;
         payload["messages"]   = messages;
         payload["max_tokens"] = req.max_tokens;
-        payload["temperature"]= req.temperature;
+        payload["temperature"]= clamp_temperature(req.provider, req.temperature);
         if (!system.empty()) payload["system"] = system;
         // Translate OpenAI-shape tools -> Anthropic shape:
         //   {type:"function", function:{name, description, parameters}}

@@ -6,6 +6,7 @@ import {
   DEFAULT_SETTINGS,
   EMPTY_PROFILE,
   PROVIDER_IDS,
+  PROVIDER_TEMP,
   type ApiKeyBag,
   type AppSettings,
   type ProviderId,
@@ -256,7 +257,11 @@ export function SettingsPage() {
           <label>Provider</label>
           <select
             value={settings.provider}
-            onChange={(e) => settingsChange('provider', e.target.value as ProviderId)}
+            onChange={(e) => {
+              const p = e.target.value as ProviderId;
+              setSettings({ ...settings, provider: p, model: '',
+                            temperature: PROVIDER_TEMP[p]?.default ?? 0.7 });
+            }}
           >
             {config?.providers.map((p) => {
               // Local provider is auth-less — its endpoint URL lives in its
@@ -276,7 +281,12 @@ export function SettingsPage() {
           <label>Model</label>
           <select
             value={settings.model || (config?.providers.find((p) => p.id === settings.provider)?.default_model ?? '')}
-            onChange={(e) => settingsChange('model', e.target.value)}
+            onChange={(e) => {
+              const tempMax = PROVIDER_TEMP[settings.provider]?.max ?? 1.5;
+              const temp = Math.min(settings.temperature, tempMax);
+              setSettings({ ...settings, model: e.target.value,
+                            temperature: PROVIDER_TEMP[settings.provider]?.default ?? temp });
+            }}
             disabled={!config}
           >
             {(() => {
@@ -306,12 +316,31 @@ export function SettingsPage() {
       </div>
       <div className="row">
         <div className="field" style={{ flex: 1 }}>
-          <label>Temperature ({settings.temperature.toFixed(2)})</label>
-          <input
-            type="range" min={0} max={1.5} step={0.05}
-            value={settings.temperature}
-            onChange={(e) => settingsChange('temperature', Number(e.target.value))}
-          />
+          {(() => {
+            const tempMax = PROVIDER_TEMP[settings.provider]?.max ?? 1.5;
+            const warn = settings.temperature > tempMax * 0.9;
+            return (
+              <>
+                <label>
+                  Temperature ({settings.temperature.toFixed(2)})
+                  <span style={{ color: 'var(--muted)', fontWeight: 'normal', marginLeft: '0.5rem' }}>
+                    · max {tempMax.toFixed(1)} for {settings.provider}
+                  </span>
+                </label>
+                <input
+                  type="range" min={0} max={tempMax} step={0.05}
+                  value={Math.min(settings.temperature, tempMax)}
+                  onChange={(e) => settingsChange('temperature', Number(e.target.value))}
+                  style={warn ? { accentColor: 'var(--error)' } : undefined}
+                />
+                {warn && (
+                  <span style={{ fontSize: '0.78rem', color: 'var(--error)' }}>
+                    ⚠ High temperature - outputs may become incoherent
+                  </span>
+                )}
+              </>
+            );
+          })()}
         </div>
         <div className="field" style={{ flex: 1 }}>
           <label>Max tokens</label>

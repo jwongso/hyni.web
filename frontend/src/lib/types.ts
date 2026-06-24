@@ -95,6 +95,25 @@ export const EMPTY_API_KEYS: ApiKeyBag = {
   local:     '',
 };
 
+/**
+ * Per-provider temperature bounds.
+ *   default  - reset to this when the provider/model changes
+ *   max      - slider hard ceiling; also enforced server-side before the API call
+ * Rationale:
+ *   openai:    API accepts 0-2 but output degrades sharply above 1.0
+ *   anthropic: API only accepts 0-1 (hard limit)
+ *   deepseek:  trained with higher diversity; stays coherent to ~1.3
+ *   mistral:   API accepts higher but docs recommend <= 1.0
+ *   local:     user controls their own model; full 0-2 range allowed
+ */
+export const PROVIDER_TEMP: Record<ProviderId, { default: number; max: number }> = {
+  openai:    { default: 0.7, max: 1.0 },
+  anthropic: { default: 0.7, max: 1.0 },
+  deepseek:  { default: 0.7, max: 1.3 },
+  mistral:   { default: 0.7, max: 1.0 },
+  local:     { default: 0.7, max: 2.0 },
+};
+
 export interface AppSettings {
   provider: ProviderId;
   model: string;             // empty string -> use server default
@@ -103,7 +122,7 @@ export interface AppSettings {
   tts_voice_uri: string;     // engine-specific voice id; empty -> default
   tts_rate: number;          // 0.5 - 2.0
   tts_pitch: number;         // 0.5 - 2.0
-  temperature: number;       // 0.0 - 1.5
+  temperature: number;       // 0.0 - max varies by provider (see PROVIDER_TEMP)
   max_tokens: number;
   speak_replies: boolean;
   /** True -> /api/chat/stream + live token render. False -> blocking. */
