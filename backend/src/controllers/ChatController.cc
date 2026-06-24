@@ -125,8 +125,6 @@ hyni::user_profile parse_profile(simdjson::ondemand::value profile_val) {
     hyni::user_profile p;
     p.resume_text  = get_str(profile_val, "resume_text");
     p.target_role  = get_str(profile_val, "target_role");
-    p.strengths    = get_str(profile_val, "strengths");
-    p.weaknesses   = get_str(profile_val, "weaknesses");
     p.extra_notes  = get_str(profile_val, "extra_notes");
     return p;
 }

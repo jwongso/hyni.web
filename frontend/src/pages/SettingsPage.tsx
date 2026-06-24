@@ -144,12 +144,20 @@ export function SettingsPage() {
       <h2>Identity context <small style={{ color: 'var(--muted)' }}>(injected into every system prompt)</small></h2>
 
       <div className="field">
-        <label>Target role / company</label>
-        <input
-          placeholder="e.g. Senior Software Engineer at Amazon"
+        <label>Role / Job description</label>
+        <textarea
+          rows={6}
+          placeholder={
+            'Paste the role title plus (optionally) the full job description, ' +
+            'responsibilities, requirements, level, team, comp expectations — ' +
+            'anything that helps the LLM tailor answers. e.g.:\n\n' +
+            'Senior Software Engineer — Distributed Systems, Amazon (Auckland)\n' +
+            'Responsibilities: …\nMust-haves: …\nNice-to-haves: …'
+          }
           value={profile.target_role}
           onChange={profileChange('target_role')}
         />
+        <small>{profile.target_role.length.toLocaleString()} characters</small>
       </div>
 
       <div className="field">
@@ -174,16 +182,13 @@ export function SettingsPage() {
       </div>
 
       <div className="field">
-        <label>Strengths (free text)</label>
-        <textarea rows={3} value={profile.strengths}  onChange={profileChange('strengths')} />
-      </div>
-      <div className="field">
-        <label>Weaknesses / growth areas (free text)</label>
-        <textarea rows={3} value={profile.weaknesses} onChange={profileChange('weaknesses')} />
-      </div>
-      <div className="field">
-        <label>Additional notes (motivations, salary expectations, anything else)</label>
-        <textarea rows={3} value={profile.extra_notes} onChange={profileChange('extra_notes')} />
+        <label>Additional notes</label>
+        <textarea
+          rows={5}
+          placeholder="Anything the LLM should know: strengths, weaknesses, motivations, salary expectations, hobbies, etc."
+          value={profile.extra_notes}
+          onChange={profileChange('extra_notes')}
+        />
       </div>
 
       {/* ===== LLM provider ========================================= */}

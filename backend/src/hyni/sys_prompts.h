@@ -11,10 +11,8 @@ namespace hyni {
 // composed system prompt.
 struct user_profile {
     std::string resume_text;       // pasted or parsed CV
-    std::string target_role;       // e.g. "Senior Software Engineer at Amazon"
-    std::string strengths;         // free-text bullets
-    std::string weaknesses;        // free-text bullets
-    std::string extra_notes;       // anything else
+    std::string target_role;       // role title plus optional full job description
+    std::string extra_notes;       // anything else — strengths, weaknesses, motivations, comp, ...
 };
 
 // Build the system prompt for a given mode + user profile.

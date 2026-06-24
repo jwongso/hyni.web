@@ -71,15 +71,13 @@ std::string compose_system_prompt(QUESTION_TYPE mode, const user_profile& profil
     }
 
     if (!profile.target_role.empty()) {
-        os << "\n\nTarget role: " << profile.target_role;
+        append_section(os, "ROLE / JOB DESCRIPTION", profile.target_role);
     }
 
     // Resume is only critical for Behavioral, but include for all modes so
     // General/Coding can reference background when relevant.
     append_section(os, "CANDIDATE RESUME", profile.resume_text);
-    append_section(os, "CANDIDATE STRENGTHS", profile.strengths);
-    append_section(os, "CANDIDATE WEAKNESSES / GROWTH AREAS", profile.weaknesses);
-    append_section(os, "ADDITIONAL NOTES", profile.extra_notes);
+    append_section(os, "ADDITIONAL NOTES",  profile.extra_notes);
 
     if (mode == QUESTION_TYPE::Behavioral && profile.resume_text.empty()) {
         os << "\n\nNOTE: No resume was provided. Tell the candidate honestly "

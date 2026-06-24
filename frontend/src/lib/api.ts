@@ -151,7 +151,7 @@ export async function probeProviderKey(
   return postChat({
     provider,
     mode: 'general',
-    profile: { resume_text: '', target_role: '', strengths: '', weaknesses: '', extra_notes: '' },
+    profile: { resume_text: '', target_role: '', extra_notes: '' },
     history: [],
     message: 'ping',
     max_tokens: 1,

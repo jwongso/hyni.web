@@ -45,16 +45,12 @@ export interface ChatMessage {
 export interface UserProfile {
   resume_text: string;
   target_role: string;
-  strengths: string;
-  weaknesses: string;
   extra_notes: string;
 }
 
 export const EMPTY_PROFILE: UserProfile = {
   resume_text: '',
   target_role: '',
-  strengths: '',
-  weaknesses: '',
   extra_notes: '',
 };
 
