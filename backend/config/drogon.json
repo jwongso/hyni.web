@@ -29,11 +29,12 @@
       "gif","png","jpg","js","css","html","ico","swf","xap",
       "apk","cur","xml","svg","woff","woff2","ttf","otf",
       "mp3","mp4","webm","ogg","json","txt","map",
-      "wasm","mjs","data"
+      "wasm","mjs","data","onnx","bin"
     ],
     "mime": {
       "application/wasm": ["wasm"],
-      "application/javascript": ["mjs"]
+      "application/javascript": ["mjs"],
+      "application/octet-stream": ["onnx", "bin"]
     },
     "use_implicit_page": true,
     "implicit_page": "index.html",
