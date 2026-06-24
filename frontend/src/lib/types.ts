@@ -3,7 +3,7 @@
 export type Mode = 'general' | 'coding' | 'behavioral';
 export const MODES: Mode[] = ['general', 'coding', 'behavioral'];
 
-export type ProviderId = 'openai' | 'anthropic';
+export type ProviderId = 'openai' | 'anthropic' | 'deepseek' | 'mistral';
 
 export interface ProviderInfo {
   id: ProviderId;

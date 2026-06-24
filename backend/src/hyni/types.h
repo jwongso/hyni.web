@@ -18,6 +18,8 @@ struct image_data {
 enum class API_PROVIDER {
     OpenAI,
     Anthropic,
+    DeepSeek,
+    Mistral,
     Unknown
 };
 
@@ -31,6 +33,8 @@ inline std::string provider_to_str(API_PROVIDER p) {
     switch (p) {
     case API_PROVIDER::OpenAI:    return "openai";
     case API_PROVIDER::Anthropic: return "anthropic";
+    case API_PROVIDER::DeepSeek:  return "deepseek";
+    case API_PROVIDER::Mistral:   return "mistral";
     default:                       return "unknown";
     }
 }
@@ -38,6 +42,8 @@ inline std::string provider_to_str(API_PROVIDER p) {
 inline API_PROVIDER provider_from_str(const std::string& s) {
     if (s == "openai")    return API_PROVIDER::OpenAI;
     if (s == "anthropic") return API_PROVIDER::Anthropic;
+    if (s == "deepseek")  return API_PROVIDER::DeepSeek;
+    if (s == "mistral")   return API_PROVIDER::Mistral;
     return API_PROVIDER::Unknown;
 }
 

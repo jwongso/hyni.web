@@ -10,9 +10,13 @@ namespace {
 
 constexpr const char OPENAI_URL[]    = "https://api.openai.com/v1/chat/completions";
 constexpr const char ANTHROPIC_URL[] = "https://api.anthropic.com/v1/messages";
+constexpr const char DEEPSEEK_URL[]  = "https://api.deepseek.com/v1/chat/completions";
+constexpr const char MISTRAL_URL[]   = "https://api.mistral.ai/v1/chat/completions";
 
 constexpr const char DEFAULT_OPENAI_MODEL[]    = "gpt-4o";
 constexpr const char DEFAULT_ANTHROPIC_MODEL[] = "claude-sonnet-4-5-20250929";
+constexpr const char DEFAULT_DEEPSEEK_MODEL[]  = "deepseek-chat";
+constexpr const char DEFAULT_MISTRAL_MODEL[]   = "mistral-large-latest";
 
 size_t curl_write(void* contents, size_t size, size_t nmemb, std::string* out) {
     if (!out) return 0;
@@ -118,6 +122,8 @@ std::string default_model(API_PROVIDER provider) {
     switch (provider) {
     case API_PROVIDER::OpenAI:    return DEFAULT_OPENAI_MODEL;
     case API_PROVIDER::Anthropic: return DEFAULT_ANTHROPIC_MODEL;
+    case API_PROVIDER::DeepSeek:  return DEFAULT_DEEPSEEK_MODEL;
+    case API_PROVIDER::Mistral:   return DEFAULT_MISTRAL_MODEL;
     default:                       return "";
     }
 }
@@ -127,7 +133,10 @@ nlohmann::json build_payload(const chat_request& req) {
     const std::string model = req.model.empty() ? default_model(req.provider) : req.model;
 
     switch (req.provider) {
-    case API_PROVIDER::OpenAI: {
+    case API_PROVIDER::OpenAI:
+    case API_PROVIDER::DeepSeek:
+    case API_PROVIDER::Mistral: {
+        // All three speak the OpenAI Chat Completions wire format.
         payload["model"]    = model;
         payload["messages"] = build_openai_messages(req);
         payload["temperature"]           = req.temperature;
@@ -222,9 +231,11 @@ chat_result send_chat(const chat_request& req, const std::string& api_key) {
         return r;
     }
 
-    const std::string url = (req.provider == API_PROVIDER::Anthropic)
-                                ? ANTHROPIC_URL
-                                : OPENAI_URL;
+    const std::string url =
+        (req.provider == API_PROVIDER::Anthropic) ? ANTHROPIC_URL :
+        (req.provider == API_PROVIDER::DeepSeek)  ? DEEPSEEK_URL  :
+        (req.provider == API_PROVIDER::Mistral)   ? MISTRAL_URL   :
+                                                    OPENAI_URL;
 
     nlohmann::json payload;
     try { payload = build_payload(req); }
@@ -262,7 +273,8 @@ chat_result send_chat(const chat_request& req, const std::string& api_key) {
     const auto t0 = std::chrono::steady_clock::now();
     CURLcode rc   = curl_easy_perform(curl);
     const auto t1 = std::chrono::steady_clock::now();
-    r.latency_ms  = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    const long long latency_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
@@ -272,13 +284,16 @@ chat_result send_chat(const chat_request& req, const std::string& api_key) {
 
     if (rc != CURLE_OK) {
         r.http_status = static_cast<int>(http_code);
+        r.latency_ms  = latency_ms;
         r.error = std::string("HTTP transport error: ") + curl_easy_strerror(rc);
         return r;
     }
 
-    return (req.provider == API_PROVIDER::Anthropic)
-               ? parse_anthropic_response(body, static_cast<int>(http_code))
-               : parse_openai_response(body, static_cast<int>(http_code));
+    r = (req.provider == API_PROVIDER::Anthropic)
+            ? parse_anthropic_response(body, static_cast<int>(http_code))
+            : parse_openai_response(body, static_cast<int>(http_code));  // also DeepSeek / Mistral
+    r.latency_ms = latency_ms;
+    return r;
 }
 
 } // namespace hyni

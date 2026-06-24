@@ -22,6 +22,8 @@ std::string api_key_for(hyni::API_PROVIDER p) {
     switch (p) {
     case hyni::API_PROVIDER::OpenAI:    return getenv_str("OPENAI_API_KEY");
     case hyni::API_PROVIDER::Anthropic: return getenv_str("ANTHROPIC_API_KEY");
+    case hyni::API_PROVIDER::DeepSeek:  return getenv_str("DEEPSEEK_API_KEY");
+    case hyni::API_PROVIDER::Mistral:   return getenv_str("MISTRAL_API_KEY");
     default:                             return "";
     }
 }
@@ -92,6 +94,8 @@ void ChatController::getConfig(const drogon::HttpRequestPtr& /*req*/,
     };
     add(hyni::API_PROVIDER::OpenAI);
     add(hyni::API_PROVIDER::Anthropic);
+    add(hyni::API_PROVIDER::DeepSeek);
+    add(hyni::API_PROVIDER::Mistral);
 
     body["modes"] = {"general", "coding", "behavioral"};
     callback(json_response(body));
