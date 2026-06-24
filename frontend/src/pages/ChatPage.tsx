@@ -202,8 +202,14 @@ export function ChatPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [send]);
 
-  // Cancel any in-flight TTS when navigating away.
-  useEffect(() => () => tts.cancel(), [tts]);
+  // Cancel any in-flight TTS when ChatPage unmounts (e.g. navigating to
+  // Settings). MUST use an empty dep array — `tts` is a new object each
+  // render, and a [tts] dep would re-run cleanup on every render and
+  // cancel the speech we just started during a streaming reply. The
+  // hook's tts.cancel is stable (useCallback with []), so calling it from
+  // a cleanup created on first render still hits the latest speaker.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => tts.cancel(), []);
 
   const provider     = config?.providers.find((p) => p.id === settings.provider);
   const hasServerKey = provider?.has_key ?? false;
