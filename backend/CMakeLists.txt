@@ -176,6 +176,16 @@ add_custom_command(TARGET hyni_web_server POST_BUILD
 )
 
 # ---------------------------------------------------------------------------
+# Integration tests (GTest). Opt-in so a default `cmake --build` doesn't
+# pull GTest into the build.
+# ---------------------------------------------------------------------------
+option(HYNI_BUILD_TESTS "Build the hyni.web integration test binary" OFF)
+if(HYNI_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
+# ---------------------------------------------------------------------------
 # Build summary printed at the end of `cmake -S backend -B build`.
 # ---------------------------------------------------------------------------
 message(STATUS "------------------------------------------------------------")
