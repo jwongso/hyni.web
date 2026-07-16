@@ -158,6 +158,10 @@ TEST_F(HyniWebApiTest, ConfigReturnsExpectedShape) {
     EXPECT_GE(j["providers"].size(), 4u);
     EXPECT_TRUE(j.contains("modes"));
     EXPECT_TRUE(j["modes"].is_array());
+    EXPECT_NE(std::find(j["modes"].begin(), j["modes"].end(), "general"), j["modes"].end());
+    EXPECT_NE(std::find(j["modes"].begin(), j["modes"].end(), "coding"), j["modes"].end());
+    EXPECT_NE(std::find(j["modes"].begin(), j["modes"].end(), "behavioral"), j["modes"].end());
+    EXPECT_NE(std::find(j["modes"].begin(), j["modes"].end(), "system_design"), j["modes"].end());
 
     // Every provider entry has the expected keys.
     for (const auto& p : j["providers"]) {

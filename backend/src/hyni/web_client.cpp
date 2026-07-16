@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <map>
 #include <stdexcept>
 #include <string_view>
 #include <curl/curl.h>
@@ -528,6 +529,31 @@ static chat_result parse_anthropic_response(const std::string& body, int http_st
 // + curl rc + latency. No parsing. Used by send_chat() once per round of
 // the tool-call loop, and by send_chat_stream() at the top of its stream.
 namespace {
+// Thread-local easy handles keep libcurl's per-handle connection cache warm
+// across turns. The cache key is provider + endpoint URL, so changing from
+// OpenAI -> Anthropic or changing the Local LLM URL naturally switches to a
+// different handle/connection pool. curl_easy_reset() clears request options
+// but preserves live connections, DNS cache, and TLS session state.
+struct easy_handle_cache {
+    ~easy_handle_cache() {
+        for (auto& [_, handle] : handles) {
+            if (handle) curl_easy_cleanup(handle);
+        }
+    }
+
+    CURL* get(API_PROVIDER provider, const std::string& url) {
+        const std::string key = provider_to_str(provider) + "|" + url;
+        CURL*& handle = handles[key];
+        if (!handle) handle = curl_easy_init();
+        if (handle) curl_easy_reset(handle);
+        return handle;
+    }
+
+    std::map<std::string, CURL*> handles;
+};
+
+thread_local easy_handle_cache curl_handles;
+
 struct post_outcome {
     std::string  body;
     long         http_status = 0;
@@ -541,7 +567,7 @@ post_outcome post_json(const std::string& url,
                        API_PROVIDER provider,
                        int timeout_seconds) {
     post_outcome o;
-    CURL* curl = curl_easy_init();
+    CURL* curl = curl_handles.get(provider, url);
     if (!curl) { o.curl_rc = CURLE_FAILED_INIT; return o; }
 
     struct curl_slist* headers = nullptr;
@@ -573,7 +599,6 @@ post_outcome post_json(const std::string& url,
     o.latency_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &o.http_status);
     curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
     return o;
 }
 } // namespace
@@ -1144,7 +1169,7 @@ void send_chat_stream(const chat_request& req,
         ctx.on_delta     = &on_delta;
         ctx.on_reasoning = &on_reasoning;
 
-        CURL* curl = curl_easy_init();
+        CURL* curl = curl_handles.get(req.provider, url);
         if (!curl) { error_text = "curl_easy_init failed"; break; }
 
         struct curl_slist* headers = nullptr;
@@ -1179,7 +1204,6 @@ void send_chat_stream(const chat_request& req,
         total_latency_ms += std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
         curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
 
         // Carry per-round content into the accumulating result.
         r.content += std::move(ctx.full_content);
