@@ -113,11 +113,18 @@ size_t curl_write(void* contents, size_t size, size_t nmemb, std::string* out) {
 //     mistral models simply ignore image blocks). Treat all mistral
 //     models as image-capable; the user-facing UX should pick a vision
 //     model if they want strong results.
-//   - Anthropic Opus / Sonnet handle `temperature` and images natively.
+//   - Anthropic Sonnet 5 rejects non-default sampling params and enables
+//     adaptive thinking by default. For this app's live prompt-helper UX,
+//     request visible answer text directly.
 bool model_supports_temperature(API_PROVIDER p, const std::string& model) {
+    if (p == API_PROVIDER::Anthropic && model == "claude-sonnet-5") return false;
     if (p != API_PROVIDER::OpenAI) return true;
     // gpt-5* refuses non-default temperature.
     return model.rfind("gpt-5", 0) != 0;
+}
+
+bool anthropic_disable_thinking(API_PROVIDER p, const std::string& model) {
+    return p == API_PROVIDER::Anthropic && model == "claude-sonnet-5";
 }
 
 // Hard ceiling per provider — mirrors PROVIDER_TEMP in types.ts.
@@ -310,7 +317,12 @@ nlohmann::json build_payload(const chat_request& req) {
         payload["model"]      = model;
         payload["messages"]   = messages;
         payload["max_tokens"] = req.max_tokens;
-        payload["temperature"]= clamp_temperature(req.provider, req.temperature);
+        if (model_supports_temperature(req.provider, model)) {
+            payload["temperature"] = clamp_temperature(req.provider, req.temperature);
+        }
+        if (anthropic_disable_thinking(req.provider, model)) {
+            payload["thinking"] = {{"type", "disabled"}};
+        }
         if (!system.empty()) payload["system"] = system;
         // Translate OpenAI-shape tools -> Anthropic shape:
         //   {type:"function", function:{name, description, parameters}}
