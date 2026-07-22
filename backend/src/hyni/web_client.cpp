@@ -61,6 +61,7 @@ constexpr model_meta OPENAI_MODELS[] = {
 };
 
 constexpr model_meta ANTHROPIC_MODELS[] = {
+    {"claude-sonnet-5",              "Claude Sonnet 5 (vision)",   true},
     {"claude-opus-4-5-20251101",     "Claude Opus 4.5 (vision)",   true},
     {"claude-sonnet-4-5-20250929",   "Claude Sonnet 4.5 (vision)", true},
     {"claude-haiku-4-5-20250929",    "Claude Haiku 4.5 (vision)",  true},
