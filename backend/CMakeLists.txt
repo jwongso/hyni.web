@@ -44,13 +44,17 @@ endif()
 add_compile_options($<$<CONFIG:Release>:-O3>)
 add_compile_options($<$<CONFIG:Release>:-pipe>)
 
-option(HYNI_NATIVE_OPTS "Apply -march=znver5 + LTO in Release builds" ON)
+option(HYNI_NATIVE_OPTS "Apply machine-specific codegen + LTO in Release builds" ON)
 if(HYNI_NATIVE_OPTS)
     add_compile_options($<$<CONFIG:Release>:-flto>)
-    add_compile_options($<$<CONFIG:Release>:-march=znver5>)
-    add_compile_options($<$<CONFIG:Release>:-fno-plt>)
     add_link_options(   $<$<CONFIG:Release>:-flto>)
-    add_link_options(   $<$<CONFIG:Release>:-Wl,-z,now,-z,relro>)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+        add_compile_options($<$<CONFIG:Release>:-mcpu=apple-m4>)
+    else()
+        add_compile_options($<$<CONFIG:Release>:-march=znver5>)
+        add_compile_options($<$<CONFIG:Release>:-fno-plt>)
+        add_link_options(   $<$<CONFIG:Release>:-Wl,-z,now,-z,relro>)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -123,6 +127,10 @@ CPMAddPackage(
         "USE_MYSQL OFF"
         "USE_SQLITE3 OFF"
         "USE_REDIS OFF"
+    # drogon v1.9.7's RequestStream.h uses std::exception_ptr without
+    # including <exception>. libstdc++ (Linux) pulls it in transitively;
+    # libc++ (macOS/Apple Clang) does not, so this fails outright there.
+    PATCH_COMMAND ${CMAKE_COMMAND} -P ${PROJECT_SOURCE_DIR}/cmake/patch_drogon_request_stream.cmake
 )
 if(drogon_ADDED)
     set_property(TARGET drogon PROPERTY SYSTEM ON)

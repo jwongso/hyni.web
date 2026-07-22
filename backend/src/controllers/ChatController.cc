@@ -69,6 +69,29 @@ bool owner_mode_enabled() {
     return !getenv_str("HYNI_OWNER_TOKEN").empty();
 }
 
+std::size_t curl_write_string(char* ptr, std::size_t size, std::size_t nmemb, void* userdata) {
+    auto* out = static_cast<std::string*>(userdata);
+    out->append(ptr, size * nmemb);
+    return size * nmemb;
+}
+
+// Fetches this machine's current WAN IP by asking an external echo service -
+// resolved live on every call (not cached), so it always reflects whatever
+// the ISP's DHCP currently has assigned, no DDNS needed.
+std::string fetch_wan_ip() {
+    CURL* curl = curl_easy_init();
+    if (!curl) return "";
+    std::string body;
+    curl_easy_setopt(curl, CURLOPT_URL, "https://api.ipify.org");
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_string);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    const CURLcode rc = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+    return rc == CURLE_OK ? body : "";
+}
+
 // Pick the API key to use for a single request.
 //   1. client_api_key (from request body) is always allowed and wins
 //   2. otherwise, server env var IF the request is owner (or open mode)
@@ -636,6 +659,28 @@ void ChatController::getLocalScan(const drogon::HttpRequestPtr& /*req*/,
     resp->setStatusCode(drogon::k200OK);
     resp->setBody(json{{"candidates", out}}.dump());
     callback(resp);
+}
+
+void ChatController::getIp(const drogon::HttpRequestPtr& req,
+                           std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+    // Query-param fallback (?token=...) in addition to the Authorization
+    // header, so this can be hit directly from a browser address bar (e.g.
+    // on a borrowed machine with no terminal handy). Scoped to this route
+    // only - not added to is_owner() itself, since a token in the query
+    // string ends up in browser history and access logs, an acceptable
+    // tradeoff here but not one to extend to the chat-proxying endpoints.
+    const std::string expected = getenv_str("HYNI_OWNER_TOKEN");
+    const bool via_query = !expected.empty() && ct_equal(expected, req->getParameter("token"));
+    if (!is_owner(req) && !via_query) {
+        callback(json_response({{"error", "owner token required"}}, drogon::k401Unauthorized));
+        return;
+    }
+    const std::string ip = fetch_wan_ip();
+    if (ip.empty()) {
+        callback(json_response({{"error", "could not resolve WAN IP"}}, drogon::k503ServiceUnavailable));
+        return;
+    }
+    callback(json_response({{"wan_ip", ip}}));
 }
 
 } // namespace hyniweb
