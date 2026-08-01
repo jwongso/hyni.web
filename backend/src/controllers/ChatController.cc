@@ -3,7 +3,10 @@
 #include "../hyni/mcp_client.h"
 
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <utility>
@@ -90,6 +93,83 @@ std::string fetch_wan_ip() {
     const CURLcode rc = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
     return rc == CURLE_OK ? body : "";
+}
+
+std::string ip_history_path() {
+    const std::string configured = getenv_str("HYNI_IP_HISTORY_FILE");
+    return configured.empty() ? "data/wan_ips.json" : configured;
+}
+
+struct ip_history_result {
+    std::vector<std::string> ips;
+    std::string error;
+};
+
+// Keep the history deliberately small and simple: it records changes in WAN
+// address, so non-sequential duplicates are valid (A, B, A). The file is
+// updated under one process-wide mutex and replaced atomically so concurrent
+// requests cannot interleave JSON.
+ip_history_result record_wan_ip(const std::string& current) {
+    static std::mutex history_mutex;
+    std::lock_guard lock(history_mutex);
+
+    const std::filesystem::path path(ip_history_path());
+    json stored = json::object();
+    std::error_code fs_error;
+
+    const bool history_exists = std::filesystem::exists(path, fs_error);
+    if (fs_error) return {{}, "could not inspect WAN IP history file"};
+    if (history_exists) {
+        std::ifstream input(path);
+        if (!input) return {{}, "could not read WAN IP history file"};
+        try {
+            input >> stored;
+        } catch (const std::exception&) {
+            return {{}, "WAN IP history file contains invalid JSON"};
+        }
+    }
+
+    std::vector<std::string> ips;
+    if (stored.is_object() && stored.contains("wan_ips") && stored["wan_ips"].is_array()) {
+        for (const auto& item : stored["wan_ips"]) {
+            if (item.is_string()) {
+                const auto ip = item.get<std::string>();
+                if (!ip.empty()) ips.push_back(ip);
+            }
+        }
+    } else if (!stored.is_object()) {
+        return {{}, "WAN IP history file has an invalid shape"};
+    }
+
+    if (ips.empty() || ips.back() != current) ips.push_back(current);
+
+    const auto parent = path.parent_path();
+    if (!parent.empty()) {
+        std::filesystem::create_directories(parent, fs_error);
+        if (fs_error) return {{}, "could not create WAN IP history directory"};
+    }
+
+    const std::filesystem::path temporary = path.string() + ".tmp";
+    std::ofstream output(temporary, std::ios::trunc);
+    if (!output) return {{}, "could not write WAN IP history file"};
+    output << json{{"wan_ips", ips}}.dump(2) << '\n';
+    output.close();
+    if (!output) return {{}, "could not flush WAN IP history file"};
+
+    std::filesystem::rename(temporary, path, fs_error);
+    if (fs_error) {
+        std::filesystem::remove(temporary);
+        return {{}, "could not replace WAN IP history file"};
+    }
+    return {std::move(ips), {}};
+}
+
+bool authorize_ip_request(const drogon::HttpRequestPtr& req) {
+    // Query-param fallback is intentionally scoped to the IP routes so the
+    // token is never accepted this way by chat-proxying endpoints.
+    const std::string expected = getenv_str("HYNI_OWNER_TOKEN");
+    const bool via_query = !expected.empty() && ct_equal(expected, req->getParameter("token"));
+    return is_owner(req) || via_query;
 }
 
 // Pick the API key to use for a single request.
@@ -663,15 +743,7 @@ void ChatController::getLocalScan(const drogon::HttpRequestPtr& /*req*/,
 
 void ChatController::getIp(const drogon::HttpRequestPtr& req,
                            std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
-    // Query-param fallback (?token=...) in addition to the Authorization
-    // header, so this can be hit directly from a browser address bar (e.g.
-    // on a borrowed machine with no terminal handy). Scoped to this route
-    // only - not added to is_owner() itself, since a token in the query
-    // string ends up in browser history and access logs, an acceptable
-    // tradeoff here but not one to extend to the chat-proxying endpoints.
-    const std::string expected = getenv_str("HYNI_OWNER_TOKEN");
-    const bool via_query = !expected.empty() && ct_equal(expected, req->getParameter("token"));
-    if (!is_owner(req) && !via_query) {
+    if (!authorize_ip_request(req)) {
         callback(json_response({{"error", "owner token required"}}, drogon::k401Unauthorized));
         return;
     }
@@ -680,7 +752,31 @@ void ChatController::getIp(const drogon::HttpRequestPtr& req,
         callback(json_response({{"error", "could not resolve WAN IP"}}, drogon::k503ServiceUnavailable));
         return;
     }
+    const auto history = record_wan_ip(ip);
+    if (!history.error.empty()) {
+        callback(json_response({{"error", history.error}}, drogon::k500InternalServerError));
+        return;
+    }
     callback(json_response({{"wan_ip", ip}}));
+}
+
+void ChatController::getIps(const drogon::HttpRequestPtr& req,
+                            std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+    if (!authorize_ip_request(req)) {
+        callback(json_response({{"error", "owner token required"}}, drogon::k401Unauthorized));
+        return;
+    }
+    const std::string ip = fetch_wan_ip();
+    if (ip.empty()) {
+        callback(json_response({{"error", "could not resolve WAN IP"}}, drogon::k503ServiceUnavailable));
+        return;
+    }
+    const auto history = record_wan_ip(ip);
+    if (!history.error.empty()) {
+        callback(json_response({{"error", history.error}}, drogon::k500InternalServerError));
+        return;
+    }
+    callback(json_response({{"wan_ips", history.ips}}));
 }
 
 } // namespace hyniweb

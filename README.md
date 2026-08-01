@@ -174,6 +174,7 @@ sequenceDiagram
 | BYOK + lockdown     | Per-request `api_key` (client) wins over server env var. `HYNI_OWNER_TOKEN` env enables guest lockdown — guests must BYOK; owner bearer unlocks server keys. Constant-time compare. |
 | Per-provider quirks | GPT-5 family `temperature` is omitted (only the implicit default `1` is accepted). DeepSeek and Local image content is dropped (text-only). Reasoning models surface `reasoning_content`. |
 | Cross-origin policy | `COOP: same-origin`, `COEP: credentialless`, `CORP: cross-origin` on every response (for WASM threading on the frontend) |
+| WAN-IP history | Owner-gated `/api/ip` and `/api/ips`; distinct WAN addresses persist in `data/wan_ips.json` (override with `HYNI_IP_HISTORY_FILE`). |
 
 Source map:
 
@@ -402,10 +403,19 @@ all flow through transparently.
 | `LOCAL_LLM_URL`      | Local        | `http://localhost:8080/v1/chat/completions` |
 | `LOCAL_LLM_API_KEY`  | Local        | *(optional; usually unset)*  |
 | `HYNI_OWNER_TOKEN`   | *(meta)*     | unset → open mode; set → owner-only access to server keys |
+| `HYNI_IP_HISTORY_FILE` | WAN-IP history | `data/wan_ips.json` |
 
 `GET /api/config` reports which providers have keys configured, the
 curated model dropdown for each, plus `owner_mode_enabled` / `is_owner`
 flags so the Settings page reacts automatically.
+
+`GET /api/ip` resolves the server's current public WAN IP and records it if
+it differs from the last recorded address. `GET /api/ips` performs the same
+refresh and returns the address-change history as `{ "wan_ips": ["..."] }`;
+non-sequential duplicates are retained (for example, `A, B, A`). Both endpoints accept the
+owner bearer token or the browser-friendly `?token=...` query parameter when
+owner mode is enabled. The history is a small JSON file and is created on the
+first successful request.
 
 ### Drogon (`backend/config/drogon.json`)
 

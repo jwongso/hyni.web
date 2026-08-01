@@ -10,6 +10,7 @@ namespace hyniweb {
 //   POST /api/chat/stream       -> SSE-streamed chat completion
 //   GET  /api/local/scan        -> probe well-known local LLM ports + models
 //   GET  /api/ip                -> this machine's current WAN IP (owner-token gated)
+//   GET  /api/ips               -> persisted distinct WAN IPs (owner-token gated)
 class ChatController : public drogon::HttpController<ChatController> {
 public:
     METHOD_LIST_BEGIN
@@ -18,6 +19,7 @@ public:
     ADD_METHOD_TO(ChatController::postChatStream,"/api/chat/stream",  drogon::Post, drogon::Options);
     ADD_METHOD_TO(ChatController::getLocalScan,  "/api/local/scan",   drogon::Get,  drogon::Options);
     ADD_METHOD_TO(ChatController::getIp,         "/api/ip",           drogon::Get,  drogon::Options);
+    ADD_METHOD_TO(ChatController::getIps,        "/api/ips",          drogon::Get,  drogon::Options);
     METHOD_LIST_END
 
     void getConfig(const drogon::HttpRequestPtr& req,
@@ -34,6 +36,9 @@ public:
 
     void getIp(const drogon::HttpRequestPtr& req,
               std::function<void(const drogon::HttpResponsePtr&)>&& callback);
+
+    void getIps(const drogon::HttpRequestPtr& req,
+                std::function<void(const drogon::HttpResponsePtr&)>&& callback);
 };
 
 } // namespace hyniweb
