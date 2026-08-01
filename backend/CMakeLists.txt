@@ -118,6 +118,14 @@ CPMAddPackage(
     NAME drogon
     GITHUB_REPOSITORY drogonframework/drogon
     GIT_TAG v1.9.7
+    # drogon v1.9.7's RequestStream.h uses std::exception_ptr without
+    # including <exception>. libstdc++ (Linux) pulls it in transitively;
+    # libc++ (macOS/Apple Clang) does not, so this fails outright there.
+    # Must stay ahead of OPTIONS: OPTIONS is a CPM multi-value keyword, so
+    # anything after it is absorbed as another drogon option and never
+    # reaches FetchContent. Here it falls through to UNPARSED_ARGUMENTS,
+    # which is what CPM forwards to FetchContent_Declare.
+    PATCH_COMMAND ${CMAKE_COMMAND} -P ${PROJECT_SOURCE_DIR}/cmake/patch_drogon_request_stream.cmake
     OPTIONS
         "BUILD_EXAMPLES OFF"
         "BUILD_CTL OFF"
