@@ -32,6 +32,7 @@
 #include <nlohmann/json.hpp>
 
 #include "http_client.h"
+#include "hyni/sys_prompts.h"
 #include "test_assets.h"
 
 using json = nlohmann::json;
@@ -129,6 +130,28 @@ std::string to_lower(std::string s) {
 }
 
 } // namespace
+
+// ============================================================================
+// System prompt composition (no server / LLM required)
+// ============================================================================
+
+TEST(HyniSystemPromptTest, AddsGeneralModeInterviewBrevityRulesOnly) {
+    const hyni::user_profile profile;
+    const auto prompt = hyni::compose_system_prompt(hyni::QUESTION_TYPE::General, profile);
+
+    EXPECT_NE(prompt.find("Be concise and high-signal"), std::string::npos);
+    EXPECT_NE(prompt.find("interviewer has limited"), std::string::npos);
+    EXPECT_NE(prompt.find("Avoid generic openings, recaps"), std::string::npos);
+
+    const auto coding = hyni::compose_system_prompt(hyni::QUESTION_TYPE::Coding, profile);
+    const auto behavioral = hyni::compose_system_prompt(hyni::QUESTION_TYPE::Behavioral, profile);
+    const auto system_design = hyni::compose_system_prompt(
+        hyni::QUESTION_TYPE::SystemDesign, profile);
+
+    EXPECT_EQ(coding.find("Additional response style for General mode"), std::string::npos);
+    EXPECT_EQ(behavioral.find("Additional response style for General mode"), std::string::npos);
+    EXPECT_EQ(system_design.find("Additional response style for General mode"), std::string::npos);
+}
 
 // --- Fixture ----------------------------------------------------------------
 

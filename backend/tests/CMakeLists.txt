@@ -7,6 +7,7 @@ add_executable(hyni_web_tests
 )
 target_include_directories(hyni_web_tests PRIVATE .)
 target_link_libraries(hyni_web_tests PRIVATE
+    hyni_core
     GTest::gtest
     GTest::gtest_main
     CURL::libcurl

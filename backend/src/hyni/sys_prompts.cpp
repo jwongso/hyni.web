@@ -5,6 +5,17 @@ namespace hyni {
 
 namespace {
 
+constexpr const char GENERAL_BREVITY_BASE[] =
+    "Additional response style for General mode:\n"
+    "- Be concise and high-signal. Assume the interviewer has limited\n"
+    "  patience and may get bored by long answers.\n"
+    "- Lead with the direct answer, then give only the essential reasoning,\n"
+    "  trade-offs, or example needed to sound credible.\n"
+    "- Prefer 2-4 short paragraphs or a short list. Do not produce an\n"
+    "  exhaustive lecture unless the user explicitly asks for depth.\n"
+    "- Avoid generic openings, recaps, motivational filler, and closing\n"
+    "  advice. Stop when the answer is complete.";
+
 constexpr const char GENERAL_BASE[] =
     "You are an interview-preparation assistant.\n"
     "Answer the candidate's interview question concisely in a natural,\n"
@@ -179,7 +190,7 @@ std::string compose_system_prompt(QUESTION_TYPE mode, const user_profile& profil
     case QUESTION_TYPE::Behavioral:   os << BEHAVIORAL_BASE;    break;
     case QUESTION_TYPE::SystemDesign: os << SYSTEM_DESIGN_BASE; break;
     case QUESTION_TYPE::General:
-    default:                          os << GENERAL_BASE;       break;
+    default:                          os << GENERAL_BASE << "\n\n" << GENERAL_BREVITY_BASE; break;
     }
 
     if (!profile.target_role.empty()) {
