@@ -16,6 +16,8 @@ interface ChatStore {
   history:     ChatMessage[];    setHistory:     Dispatch<SetStateAction<ChatMessage[]>>;
   buffer:      string;           setBuffer:      Dispatch<SetStateAction<string>>;
   pendingImgs: ImageData[];      setPendingImgs: Dispatch<SetStateAction<ImageData[]>>;
+  /** "God mode" toggle — only applied by the backend when mode === 'general'. */
+  godMode:     boolean;          setGodMode:     Dispatch<SetStateAction<boolean>>;
 }
 
 const ChatCtx = createContext<ChatStore | null>(null);
@@ -25,9 +27,10 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   const [history,     setHistory]     = useState<ChatMessage[]>([]);
   const [buffer,      setBuffer]      = useState<string>('');
   const [pendingImgs, setPendingImgs] = useState<ImageData[]>([]);
+  const [godMode,     setGodMode]     = useState<boolean>(false);
 
   return (
-    <ChatCtx.Provider value={{ mode, setMode, history, setHistory, buffer, setBuffer, pendingImgs, setPendingImgs }}>
+    <ChatCtx.Provider value={{ mode, setMode, history, setHistory, buffer, setBuffer, pendingImgs, setPendingImgs, godMode, setGodMode }}>
       {children}
     </ChatCtx.Provider>
   );

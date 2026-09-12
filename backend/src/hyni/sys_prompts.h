@@ -20,7 +20,13 @@ struct user_profile {
 //   - General:    concise, interview-appropriate.
 //   - Coding:     Python by default unless prompt names a language.
 //   - Behavioral: strict STAR, grounded only in user_profile.resume_text.
-std::string compose_system_prompt(QUESTION_TYPE mode, const user_profile& profile);
+//
+// `god_mode`, when true AND mode == General, swaps in an omniscient-expert
+// prompt and drops the resume / target_role grounding entirely (the
+// candidate wants a "know everything" answer, not one tailored to their
+// specific background). No-op for every other mode.
+std::string compose_system_prompt(QUESTION_TYPE mode, const user_profile& profile,
+                                  bool god_mode = false);
 
 } // namespace hyni
 

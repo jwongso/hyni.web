@@ -157,7 +157,7 @@ nlohmann::json build_openai_messages(const chat_request& req) {
     nlohmann::json messages = nlohmann::json::array();
 
     // System message.
-    const std::string sys = compose_system_prompt(req.mode, req.profile);
+    const std::string sys = compose_system_prompt(req.mode, req.profile, req.god_mode);
     if (!sys.empty()) {
         messages.push_back({{"role", "system"}, {"content", sys}});
     }
@@ -202,7 +202,7 @@ nlohmann::json build_openai_messages(const chat_request& req) {
 
 nlohmann::json build_anthropic_messages(const chat_request& req,
                                         std::string& system_out) {
-    system_out = compose_system_prompt(req.mode, req.profile);
+    system_out = compose_system_prompt(req.mode, req.profile, req.god_mode);
 
     nlohmann::json messages = nlohmann::json::array();
 

@@ -238,6 +238,12 @@ inline int get_int(simdjson::ondemand::value parent,
     return (parent[field].get(v) == simdjson::SUCCESS) ? static_cast<int>(v) : def;
 }
 
+inline bool get_bool(simdjson::ondemand::value parent,
+                     std::string_view field, bool def) {
+    bool v;
+    return (parent[field].get(v) == simdjson::SUCCESS) ? v : def;
+}
+
 hyni::user_profile parse_profile(simdjson::ondemand::value profile_val) {
     hyni::user_profile p;
     p.resume_text  = get_str(profile_val, "resume_text");
@@ -308,6 +314,7 @@ bool parse_chat_request(const std::string& body,
     out.max_tokens   = get_int(root,    "max_tokens", 4096);
     out.client_api_key = get_str(root, "api_key");
     out.local_url      = get_str(root, "local_url");
+    out.god_mode        = get_bool(root, "god_mode", false);
 
     simdjson::ondemand::value profile_val;
     if (root["profile"].get(profile_val) == simdjson::SUCCESS) {

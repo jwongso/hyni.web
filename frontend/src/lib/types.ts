@@ -184,6 +184,13 @@ export interface ChatRequestBody {
   api_key?: string;
   /** Override for the Local provider URL (ignored for cloud providers). */
   local_url?: string;
+  /**
+   * "God mode" — only meaningful when mode === 'general'. Swaps in an
+   * omniscient-expert system prompt and drops resume/role grounding, so
+   * the model answers on the merits of the question alone instead of
+   * tailoring to the candidate's specific background.
+   */
+  god_mode?: boolean;
 }
 
 export interface ChatResponseBody {

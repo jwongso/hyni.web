@@ -27,6 +27,35 @@ constexpr const char GENERAL_BASE[] =
     "unless the question explicitly calls for a list. Stay strictly on the\n"
     "topic of the question.";
 
+constexpr const char GOD_MODE_BASE[] =
+    "You are an omniscient subject-matter expert helping the candidate\n"
+    "answer ANY interview question with maximum accuracy and confidence,\n"
+    "independent of their specific resume or job history.\n"
+    "\n"
+    "Rules:\n"
+    "1. Answer purely on the merits of the question itself, drawing on the\n"
+    "   full breadth of general, technical, and domain knowledge available\n"
+    "   to you. Do not limit yourself to a narrow specialty.\n"
+    "2. Never say you don't know or refuse to answer. If genuinely\n"
+    "   uncertain, state the single most defensible expert answer, note\n"
+    "   the one assumption you're making in a single line, and proceed.\n"
+    "3. Prefer being precise and technically correct over being safe or\n"
+    "   hedging. Do not pad the answer with disclaimers.\n"
+    "4. Do NOT invent personal experience, employers, projects, dates, or\n"
+    "   metrics as if they were the candidate's own history — you have no\n"
+    "   resume to ground that in here. Speak in general expert terms\n"
+    "   ('the standard approach is...', 'in practice, teams typically...')\n"
+    "   rather than fabricating a first-person anecdote.\n"
+    "5. Match depth to the question: crisp and direct for simple factual\n"
+    "   asks, structured (short paragraphs or a tight list) for complex or\n"
+    "   multi-part ones. Do not produce an exhaustive lecture unless the\n"
+    "   question calls for depth.\n"
+    "6. Speak naturally, as the candidate would say it out loud in the\n"
+    "   interview — confident, first-person where appropriate, no filler\n"
+    "   like \"Certainly\" or \"As an AI\", no corporate jargon.\n"
+    "7. If the question spans multiple sub-topics, address each briefly\n"
+    "   rather than picking only one.";
+
 constexpr const char CODING_BASE[] =
     "You are an interview-preparation coding assistant.\n"
     "\n"
@@ -182,24 +211,37 @@ void append_section(std::ostringstream& os,
 
 } // namespace
 
-std::string compose_system_prompt(QUESTION_TYPE mode, const user_profile& profile) {
+std::string compose_system_prompt(QUESTION_TYPE mode, const user_profile& profile,
+                                  bool god_mode) {
     std::ostringstream os;
+
+    // God mode only applies to General — other modes are inherently
+    // resume/context-grounded (Behavioral needs it, Coding/System Design
+    // don't reference it in a way that conflicts with omniscient framing).
+    const bool god = god_mode && mode == QUESTION_TYPE::General;
 
     switch (mode) {
     case QUESTION_TYPE::Coding:       os << CODING_BASE;        break;
     case QUESTION_TYPE::Behavioral:   os << BEHAVIORAL_BASE;    break;
     case QUESTION_TYPE::SystemDesign: os << SYSTEM_DESIGN_BASE; break;
     case QUESTION_TYPE::General:
-    default:                          os << GENERAL_BASE << "\n\n" << GENERAL_BREVITY_BASE; break;
+    default:
+        if (god) os << GOD_MODE_BASE;
+        else     os << GENERAL_BASE << "\n\n" << GENERAL_BREVITY_BASE;
+        break;
     }
 
-    if (!profile.target_role.empty()) {
+    // God mode deliberately drops role + resume grounding — the whole point
+    // is to answer as an omniscient expert, not as this specific candidate.
+    if (!god && !profile.target_role.empty()) {
         append_section(os, "ROLE / JOB DESCRIPTION", profile.target_role);
     }
-
-    // Resume is only critical for Behavioral, but include for all modes so
-    // General/Coding can reference background when relevant.
-    append_section(os, "CANDIDATE RESUME", profile.resume_text);
+    if (!god) {
+        // Resume is only critical for Behavioral, but include for all other
+        // non-god modes so General/Coding can reference background when
+        // relevant.
+        append_section(os, "CANDIDATE RESUME", profile.resume_text);
+    }
     append_section(os, "ADDITIONAL NOTES",  profile.extra_notes);
 
     if (mode == QUESTION_TYPE::Behavioral && profile.resume_text.empty()) {

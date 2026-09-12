@@ -38,7 +38,7 @@ export function ChatPage() {
   // transient state (sending flag, streaming text, errors, interim STT
   // partial transcripts, in-flight abort controller) stays local.
   const { mode, setMode, history, setHistory, buffer, setBuffer,
-          pendingImgs, setPendingImgs } = useChatStore();
+          pendingImgs, setPendingImgs, godMode, setGodMode } = useChatStore();
 
   const [interim, setInterim]               = useState('');
   const [sending, setSending]               = useState(false);
@@ -219,6 +219,8 @@ export function ChatPage() {
       // Per-request override for the Local provider endpoint (ignored by
       // the backend for any other provider).
       local_url:   settings.local_url || undefined,
+      // Only meaningful to the backend when mode === 'general'.
+      god_mode:    mode === 'general' && godMode ? true : undefined,
     };
 
     const rollback = (reason: string) => {
@@ -314,7 +316,7 @@ export function ChatPage() {
     } finally {
       setSending(false);
     }
-  }, [buffer, pendingImgs, sending, history, settings, profile, mode, tts]);
+  }, [buffer, pendingImgs, sending, history, settings, profile, mode, godMode, tts]);
 
   const cancelInflight = useCallback(() => {
     abortRef.current?.abort();
@@ -373,6 +375,18 @@ export function ChatPage() {
       )}
       <div className="toolbar">
         <ModeToggle value={mode} onChange={setMode} disabled={sending} />
+        {mode === 'general' && (
+          <label className="status-pill" title="Answer as an omniscient expert, ignoring your resume/role — for general-knowledge questions">
+            <input
+              type="checkbox"
+              checked={godMode}
+              disabled={sending}
+              onChange={(e) => setGodMode(e.target.checked)}
+              style={{ marginRight: '0.4em' }}
+            />
+            🧠 God mode
+          </label>
+        )}
         <span className="status-pill" title="Change in Settings">STT: {settings.stt_engine}</span>
         <span className={'status-pill ' + (stt.state === 'listening' ? 'ok' : stt.state === 'error' ? 'err' : '')}>
           {stt.state}{stt.statusMessage ? ` — ${stt.statusMessage}` : ''}

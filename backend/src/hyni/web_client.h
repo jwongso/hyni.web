@@ -14,6 +14,13 @@ struct chat_request {
     std::string model;                       // empty -> provider default
     QUESTION_TYPE mode = QUESTION_TYPE::General;
     user_profile profile;                    // injected into system prompt
+    /**
+     * "God mode" — only meaningful when mode == General. Swaps in an
+     * omniscient-expert system prompt and drops resume / target_role
+     * grounding, so the model answers on the merits of the question alone
+     * instead of tailoring to the candidate's specific background.
+     */
+    bool god_mode = false;
     std::vector<chat_message> history;       // prior turns (frontend-managed)
     std::string user_message;                // newest user turn
     std::vector<image_data> images;          // attached to the new user turn
