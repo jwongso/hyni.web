@@ -153,7 +153,7 @@ TEST(HyniSystemPromptTest, AddsGeneralModeInterviewBrevityRulesOnly) {
     EXPECT_EQ(system_design.find("Additional response style for General mode"), std::string::npos);
 }
 
-TEST(HyniSystemPromptTest, AiAssistedModeIsPairProgrammerNotOneShotCoder) {
+TEST(HyniSystemPromptTest, AiAssistedModeCoachesThePromptsNotTheCode) {
     hyni::user_profile profile;
     profile.resume_text = "C++ engineer";
     profile.extra_notes = "TIME BUDGET 130-180 words";
@@ -162,9 +162,14 @@ TEST(HyniSystemPromptTest, AiAssistedModeIsPairProgrammerNotOneShotCoder) {
     EXPECT_EQ(hyni::mode_to_str(hyni::QUESTION_TYPE::AiAssisted), "ai_assisted");
 
     const auto prompt = hyni::compose_system_prompt(hyni::QUESTION_TYPE::AiAssisted, profile);
-    EXPECT_NE(prompt.find("You CANNOT see the repository"), std::string::npos);
-    EXPECT_NE(prompt.find("Do not implement the whole task in one response"), std::string::npos);
-    EXPECT_NE(prompt.find("BUG-FIX MODE"), std::string::npos);
+    EXPECT_NE(prompt.find("You are an interview coach for AI-ENABLED"), std::string::npos);
+    EXPECT_NE(prompt.find("YOU are not that assistant"), std::string::npos);
+    EXPECT_NE(prompt.find("PROJECT_FILES_INSTRUCTIONS.md"), std::string::npos);
+    EXPECT_NE(prompt.find("PROMPT TO SEND"), std::string::npos);
+    EXPECT_NE(prompt.find("IF IT IS STILL UNCLEAR"), std::string::npos);
+    EXPECT_NE(prompt.find("SAY TO THE INTERVIEWER"), std::string::npos);
+    EXPECT_NE(prompt.find("EXPERIENCE BRIDGE"), std::string::npos);
+    EXPECT_NE(prompt.find("Node.js runs\nJavaScript on a single thread"), std::string::npos);
     EXPECT_NE(prompt.find("C++ engineer"), std::string::npos);
     EXPECT_NE(prompt.find("TIME BUDGET 130-180 words"), std::string::npos);
     EXPECT_EQ(prompt.find("Additional response style for General mode"), std::string::npos);
