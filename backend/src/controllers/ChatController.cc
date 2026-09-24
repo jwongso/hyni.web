@@ -366,7 +366,7 @@ void ChatController::getConfig(const drogon::HttpRequestPtr& req,
     add(hyni::API_PROVIDER::Mistral);
     add(hyni::API_PROVIDER::Local);
 
-    body["modes"]              = {"general", "coding", "behavioral", "system_design"};
+    body["modes"]              = {"general", "coding", "behavioral", "system_design", "ai_assisted"};
     body["owner_mode_enabled"] = owner_mode;
     body["is_owner"]           = owner;
 

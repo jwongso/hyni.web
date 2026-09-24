@@ -153,6 +153,27 @@ TEST(HyniSystemPromptTest, AddsGeneralModeInterviewBrevityRulesOnly) {
     EXPECT_EQ(system_design.find("Additional response style for General mode"), std::string::npos);
 }
 
+TEST(HyniSystemPromptTest, AiAssistedModeIsPairProgrammerNotOneShotCoder) {
+    hyni::user_profile profile;
+    profile.resume_text = "C++ engineer";
+    profile.extra_notes = "TIME BUDGET 130-180 words";
+
+    EXPECT_EQ(hyni::mode_from_str("ai_assisted"), hyni::QUESTION_TYPE::AiAssisted);
+    EXPECT_EQ(hyni::mode_to_str(hyni::QUESTION_TYPE::AiAssisted), "ai_assisted");
+
+    const auto prompt = hyni::compose_system_prompt(hyni::QUESTION_TYPE::AiAssisted, profile);
+    EXPECT_NE(prompt.find("You CANNOT see the repository"), std::string::npos);
+    EXPECT_NE(prompt.find("Do not implement the whole task in one response"), std::string::npos);
+    EXPECT_NE(prompt.find("BUG-FIX MODE"), std::string::npos);
+    EXPECT_NE(prompt.find("C++ engineer"), std::string::npos);
+    EXPECT_NE(prompt.find("TIME BUDGET 130-180 words"), std::string::npos);
+    EXPECT_EQ(prompt.find("Additional response style for General mode"), std::string::npos);
+    EXPECT_EQ(prompt.find("complete, runnable implementation"), std::string::npos);
+
+    // God mode is a General-only switch and must not alter this mode.
+    EXPECT_EQ(prompt, hyni::compose_system_prompt(hyni::QUESTION_TYPE::AiAssisted, profile, true));
+}
+
 // --- Fixture ----------------------------------------------------------------
 
 class HyniWebApiTest : public ::testing::Test {
@@ -185,6 +206,7 @@ TEST_F(HyniWebApiTest, ConfigReturnsExpectedShape) {
     EXPECT_NE(std::find(j["modes"].begin(), j["modes"].end(), "coding"), j["modes"].end());
     EXPECT_NE(std::find(j["modes"].begin(), j["modes"].end(), "behavioral"), j["modes"].end());
     EXPECT_NE(std::find(j["modes"].begin(), j["modes"].end(), "system_design"), j["modes"].end());
+    EXPECT_NE(std::find(j["modes"].begin(), j["modes"].end(), "ai_assisted"), j["modes"].end());
 
     // Every provider entry has the expected keys.
     for (const auto& p : j["providers"]) {

@@ -34,7 +34,8 @@ enum class QUESTION_TYPE {
     General,
     Coding,
     Behavioral,
-    SystemDesign
+    SystemDesign,
+    AiAssisted
 };
 
 inline std::string provider_to_str(API_PROVIDER p) {
@@ -63,6 +64,7 @@ inline std::string mode_to_str(QUESTION_TYPE t) {
     case QUESTION_TYPE::Coding:       return "coding";
     case QUESTION_TYPE::Behavioral:   return "behavioral";
     case QUESTION_TYPE::SystemDesign: return "system_design";
+    case QUESTION_TYPE::AiAssisted:   return "ai_assisted";
     }
     return "general";
 }
@@ -71,6 +73,7 @@ inline QUESTION_TYPE mode_from_str(const std::string& s) {
     if (s == "coding")        return QUESTION_TYPE::Coding;
     if (s == "behavioral")    return QUESTION_TYPE::Behavioral;
     if (s == "system_design") return QUESTION_TYPE::SystemDesign;
+    if (s == "ai_assisted")   return QUESTION_TYPE::AiAssisted;
     return QUESTION_TYPE::General;
 }
 

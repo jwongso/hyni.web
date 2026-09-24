@@ -11,6 +11,7 @@ const LABELS: Record<Mode, string> = {
   coding:        'Coding',
   behavioral:    'Behavioral (STAR)',
   system_design: 'System Design',
+  ai_assisted:   'AI-Assisted',
 };
 
 export function ModeToggle({ value, onChange, disabled }: Props) {
