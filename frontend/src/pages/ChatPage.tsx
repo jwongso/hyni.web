@@ -376,13 +376,12 @@ export function ChatPage() {
       <div className="toolbar">
         <ModeToggle value={mode} onChange={setMode} disabled={sending} />
         {mode === 'general' && (
-          <label className="status-pill" title="Answer as an omniscient expert, ignoring your resume/role — for general-knowledge questions">
+          <label className="status-pill god-toggle" title="Answer as an omniscient expert, ignoring your resume/role — for general-knowledge questions">
             <input
               type="checkbox"
               checked={godMode}
               disabled={sending}
               onChange={(e) => setGodMode(e.target.checked)}
-              style={{ marginRight: '0.4em' }}
             />
             🧠 God mode
           </label>

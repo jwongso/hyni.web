@@ -204,15 +204,27 @@ textarea { resize: vertical; font-family: var(--mono); }
 
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.5rem 0.6rem;
   padding: 0.6rem 1rem;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
+.toolbar button { white-space: nowrap; }
 
-.mode-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+/* Tabs never shrink or break text; on a very narrow window the group
+   scrolls sideways inside its own row instead of clipping tabs. */
+.mode-toggle {
+  display: inline-flex;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-x: auto;
+}
 .mode-toggle button {
+  flex: none;
+  white-space: nowrap;
   background: transparent;
   color: var(--muted);
   border: none;
@@ -234,6 +246,7 @@ textarea { resize: vertical; font-family: var(--mono); }
 .engine-picker:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .status-pill {
+  white-space: nowrap;
   padding: 0.15rem 0.55rem;
   border-radius: 999px;
   font-size: 0.75rem;
@@ -241,6 +254,13 @@ textarea { resize: vertical; font-family: var(--mono); }
   color: var(--muted);
   border: 1px solid var(--border);
 }
+.god-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+.god-toggle input { width: auto; padding: 0; margin: 0; }
 .status-pill.ok      { color: var(--success); border-color: var(--success); }
 .status-pill.warn    { color: var(--warning); border-color: var(--warning); }
 .status-pill.err     { color: var(--error);   border-color: var(--error); }
