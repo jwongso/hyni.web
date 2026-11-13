@@ -78,8 +78,19 @@ class WebSpeechAdapter implements SpeechRecognizer {
   private permissionOk = false;
   private wantRunning = false;
   private running = false;
+  private language = 'en-US';
 
   setHandlers(h: RecognizerHandlers): void { this.handlers = h; }
+
+  setLanguage(language: string): void {
+    if (this.language === language) return;
+    this.language = language;
+    if (this.rec) {
+      this.rec.lang = language;
+      // onend restarts an active session with the new language.
+      if (this.wantRunning) this.rec.abort();
+    }
+  }
 
   private emit(state: RecognizerState, msg?: string): void {
     this.handlers.onStatus?.(state, msg);
@@ -99,7 +110,7 @@ class WebSpeechAdapter implements SpeechRecognizer {
     const rec = new SpeechRecognitionImpl();
     rec.continuous     = true;
     rec.interimResults = true;
-    rec.lang           = navigator.language || 'en-US';
+    rec.lang           = this.language;
 
     rec.onresult = (event: any) => {
       let finalText = '';

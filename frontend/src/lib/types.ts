@@ -79,6 +79,8 @@ export const EMPTY_PROFILE: UserProfile = {
 };
 
 export type SttEngineId = 'webspeech' | 'wstream' | 'transformersjs';
+export const STT_LANGUAGES = ['en-US', 'de-DE'] as const;
+export type SttLanguage = typeof STT_LANGUAGES[number];
 export type TtsEngineId = 'webspeech' | 'piper' | 'elevenlabs';
 
 /**
@@ -118,6 +120,7 @@ export interface AppSettings {
   provider: ProviderId;
   model: string;             // empty string -> use server default
   stt_engine: SttEngineId;
+  stt_language: SttLanguage;
   tts_engine: TtsEngineId;
   tts_voice_uri: string;     // engine-specific voice id; empty -> default
   tts_rate: number;          // 0.5 - 2.0
@@ -153,6 +156,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   provider: 'openai',
   model: '',
   stt_engine: 'webspeech',
+  stt_language: 'en-US',
   tts_engine: 'webspeech',
   tts_voice_uri: '',
   tts_rate: 1.0,

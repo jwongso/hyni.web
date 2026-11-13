@@ -5,6 +5,14 @@ namespace hyni {
 
 namespace {
 
+constexpr const char RESPONSE_LANGUAGE[] =
+    "Reply in the same natural language as the user's latest message, unless\n"
+    "they explicitly request another language. For German questions, answer\n"
+    "in German; for English questions, answer in English. Apply this to\n"
+    "explanations and section headings, regardless of the language of these\n"
+    "instructions, the resume, or earlier messages. Preserve code syntax\n"
+    "and technical identifiers.";
+
 constexpr const char GENERAL_BREVITY_BASE[] =
     "Additional response style for General mode:\n"
     "- Be concise and high-signal. Assume the interviewer has limited\n"
@@ -330,6 +338,8 @@ std::string compose_system_prompt(QUESTION_TYPE mode, const user_profile& profil
         else     os << GENERAL_BASE << "\n\n" << GENERAL_BREVITY_BASE;
         break;
     }
+
+    append_section(os, "RESPONSE LANGUAGE", RESPONSE_LANGUAGE);
 
     // God mode deliberately drops role + resume grounding — the whole point
     // is to answer as an omniscient expert, not as this specific candidate.

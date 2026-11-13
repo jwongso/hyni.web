@@ -75,6 +75,8 @@ export interface SpeechRecognizer {
   readonly id: SttEngineId;
   /** Replace all event handlers in one shot. */
   setHandlers(h: RecognizerHandlers): void;
+  /** Set a BCP-47 recognition language for engines that support it. */
+  setLanguage?(language: string): void;
   /** Idempotent: loads models, primes the runtime. May trigger permission UI. */
   init(): Promise<void>;
   /** Begin capturing audio. Must call init() first (start() does so internally). */

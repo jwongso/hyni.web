@@ -9,6 +9,7 @@ import type {
   AppSettings,
   ChatMessage,
   ServerConfig,
+  SttLanguage,
 } from '../lib/types';
 import { useChatStore } from '../state/ChatStore';
 import { useSpeechRecognizer } from '../stt/useSpeechRecognizer';
@@ -21,6 +22,7 @@ import { useSpeaker } from '../tts/useSpeaker';
 // useSpeechRecognizer / useSpeaker hooks — both of which transparently
 // dispose the prior engine when the selection changes, so flipping
 // engines in Settings + revisiting Chat just works.
+// The recognition language is selected in the chat toolbar and saved immediately.
 //
 // Session UX:
 //   - "🎙 Start listening" engages the chosen STT.
@@ -65,7 +67,14 @@ export function ChatPage() {
       }
     },
     onError: (msg) => setError(msg),
-  });
+  }, settings.stt_language);
+
+  const changeSpeechLanguage = (language: SttLanguage) => {
+    const next = { ...storage.loadSettings(), stt_language: language };
+    storage.saveSettings(next);
+    setSettings(next);
+    setInterim('');
+  };
 
   // --- TTS --------------------------------------------------------------
   const tts = useSpeaker(settings.tts_engine);
@@ -325,13 +334,13 @@ export function ChatPage() {
     setSending(false);
   }, []);
 
-  // Global `s` -> send (suppressed inside inputs / textareas).
+  // Global `s` -> send (suppressed inside form controls).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 's' || e.metaKey || e.ctrlKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
       const tag = t?.tagName?.toLowerCase() ?? '';
-      if (tag === 'input' || tag === 'textarea' || (t && (t as any).isContentEditable)) return;
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || (t && (t as any).isContentEditable)) return;
       e.preventDefault();
       void send();
     };
@@ -395,6 +404,16 @@ export function ChatPage() {
           {settings.provider}{keyLabel ? `: ${keyLabel}` : ''}
         </span>
         <span style={{ flex: 1 }} />
+        <select
+          className="engine-picker"
+          aria-label="Speech recognition language"
+          title="Speech recognition language — switches immediately"
+          value={settings.stt_language}
+          onChange={(e) => changeSpeechLanguage(e.target.value as SttLanguage)}
+        >
+          <option value="en-US">English</option>
+          <option value="de-DE">German (Deutsch)</option>
+        </select>
         {stt.isRunning
           ? <button className="secondary" onClick={() => void stt.stop()}>⏹ Stop listening</button>
           : <button onClick={() => void stt.start()}>🎙 Start listening</button>}

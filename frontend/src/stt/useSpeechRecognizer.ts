@@ -37,6 +37,7 @@ export interface UseSpeechRecognizerResult {
 export function useSpeechRecognizer(
   engine: SttEngineId,
   userHandlers: RecognizerHandlers,
+  language: string = 'en-US',
 ): UseSpeechRecognizerResult {
   const [state,         setState]         = useState<RecognizerState>('idle');
   const [statusMessage, setStatusMessage] = useState<string>('');
@@ -108,6 +109,10 @@ export function useSpeechRecognizer(
       try { r.dispose(); } catch { /* ignore */ }
     };
   }, [engine]);
+
+  useEffect(() => {
+    recRef.current?.setLanguage?.(language);
+  }, [engine, language]);
 
   const start = useCallback(async () => {
     setError('');
