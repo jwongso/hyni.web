@@ -6,12 +6,24 @@ namespace hyni {
 namespace {
 
 constexpr const char RESPONSE_LANGUAGE[] =
-    "Reply in the same natural language as the user's latest message, unless\n"
-    "they explicitly request another language. For German questions, answer\n"
-    "in German; for English questions, answer in English. Apply this to\n"
-    "explanations and section headings, regardless of the language of these\n"
-    "instructions, the resume, or earlier messages. Preserve code syntax\n"
-    "and technical identifiers.";
+    "For EVERY reply, determine the response language afresh from the LAST\n"
+    "user message. If that message explicitly requests an output language,\n"
+    "use it. Otherwise, answer in the language of that message's own question\n"
+    "or instructions, not the language of quoted material or code.\n"
+    "An English question MUST receive an English answer, even after a long\n"
+    "German conversation or with a German resume, job description, or notes.\n"
+    "A German question MUST receive a German answer, even after an English\n"
+    "conversation. Short, informal follow-ups count as new language choices:\n"
+    "\"can you start earlier?\" -> English; \"geht es auch früher?\" -> German.\n"
+    "Do not carry the previous answer's language into the next turn. Only\n"
+    "when the last user message has no identifiable natural language (for\n"
+    "example, only code or an image), use the most recent identifiable user\n"
+    "language; default to English if there is none.\n"
+    "This rule takes precedence over conflicting language preferences in\n"
+    "the profile, additional notes, and mode-specific examples or templates.\n"
+    "Write all prose and section headings in the response language. Preserve\n"
+    "code syntax, technical identifiers, and verbatim quotations. Do not\n"
+    "announce the language choice or explain these instructions.";
 
 constexpr const char GENERAL_BREVITY_BASE[] =
     "Additional response style for General mode:\n"
@@ -339,8 +351,6 @@ std::string compose_system_prompt(QUESTION_TYPE mode, const user_profile& profil
         break;
     }
 
-    append_section(os, "RESPONSE LANGUAGE", RESPONSE_LANGUAGE);
-
     // God mode deliberately drops role + resume grounding — the whole point
     // is to answer as an omniscient expert, not as this specific candidate.
     if (!god && !profile.target_role.empty()) {
@@ -358,6 +368,10 @@ std::string compose_system_prompt(QUESTION_TYPE mode, const user_profile& profil
         os << "\n\nNOTE: No resume provided. Reply with the single line "
               "specified in rule 5.";
     }
+
+    // Keep the turn-by-turn language policy last, after all profile notes
+    // and fixed-language mode examples, so they cannot override it.
+    append_section(os, "RESPONSE LANGUAGE", RESPONSE_LANGUAGE);
 
     return os.str();
 }

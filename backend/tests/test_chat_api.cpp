@@ -18,9 +18,11 @@
 //   HYNI_TESTS_LIVE_LLM=1 HYNI_TEST_OWNER_TOKEN=Auckland2023 ./build/hyni_web_tests
 //   ./build/hyni_web_tests --gtest_color=yes
 //
-// Cost note: each live-LLM test sends ≤1 KB prompt + ≤16 output tokens.
-// A full pass against OpenAI + Anthropic is well under $0.05.
+// Live tests consume provider credits. The language-switching regression
+// makes 12 requests, capped at 192 output tokens each.
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -33,6 +35,7 @@
 
 #include "http_client.h"
 #include "hyni/sys_prompts.h"
+#include "hyni/web_client.h"
 #include "test_assets.h"
 
 using json = nlohmann::json;
@@ -179,6 +182,41 @@ TEST(HyniSystemPromptTest, AiAssistedModeCoachesThePromptsNotTheCode) {
     EXPECT_EQ(prompt, hyni::compose_system_prompt(hyni::QUESTION_TYPE::AiAssisted, profile, true));
 }
 
+TEST(HyniSystemPromptTest, LatestMessageLanguagePolicyComesAfterAllProfileInstructions) {
+    hyni::chat_request request;
+    request.user_message = "so are you able to start earlier";
+    request.profile.resume_text = "Firmware-Entwickler";
+    request.profile.target_role = "Teamleitung in Berlin";
+    request.profile.extra_notes = "Always reply in German.";
+    request.history = {{"user", "Wann können Sie anfangen?", {}},
+                       {"assistant", "Im April, nach meinem Umzug.", {}}};
+    for (const auto provider : {hyni::API_PROVIDER::OpenAI, hyni::API_PROVIDER::Anthropic,
+                               hyni::API_PROVIDER::DeepSeek, hyni::API_PROVIDER::Mistral,
+                               hyni::API_PROVIDER::Local}) {
+        request.provider = provider;
+        for (const auto mode : {hyni::QUESTION_TYPE::General, hyni::QUESTION_TYPE::Coding,
+                                hyni::QUESTION_TYPE::Behavioral, hyni::QUESTION_TYPE::SystemDesign,
+                                hyni::QUESTION_TYPE::AiAssisted}) {
+            request.mode = mode;
+            for (const bool god : {false, true}) {
+                request.god_mode = god;
+                const auto payload = hyni::build_payload(request);
+                const std::string system = provider == hyni::API_PROVIDER::Anthropic
+                    ? payload.at("system").get<std::string>()
+                    : payload.at("messages").at(0).at("content").get<std::string>();
+                const auto policy = system.find("--- RESPONSE LANGUAGE ---");
+                ASSERT_NE(policy, std::string::npos);
+                EXPECT_GT(policy, system.find(request.profile.extra_notes));
+                EXPECT_EQ(system.find("--- ", policy + 4), std::string::npos);
+                EXPECT_NE(system.find("LAST\nuser message", policy), std::string::npos);
+                EXPECT_NE(system.find("Short, informal follow-ups", policy), std::string::npos);
+                EXPECT_NE(payload.at("messages").back().at("content").dump().find(request.user_message),
+                          std::string::npos);
+            }
+        }
+    }
+}
+
 // --- Fixture ----------------------------------------------------------------
 
 class HyniWebApiTest : public ::testing::Test {
@@ -285,6 +323,86 @@ TEST_F(HyniWebApiTest, WrongBearerIs402WhenOwnerModeEnabled) {
 // ============================================================================
 // Live LLM round-trips
 // ============================================================================
+
+TEST_F(HyniWebApiTest, SonnetLanguageFollowsLatestPromptWithGermanInterviewHistory) {
+    if (!live_llm()) GTEST_SKIP() << "HYNI_TESTS_LIVE_LLM not set";
+
+    // Synthetic context based on the reported failure. The exact informal
+    // English questions must not inherit the German interview's language.
+    const json profile = {
+        {"target_role", "Leitung eines Firmware-Teams in Berlin"},
+        {"resume_text", "Embedded-Softwareentwickler mit Erfahrung in C++ und Linux."},
+        {"extra_notes", "Antworte prägnant, maximal zwei Sätze. Always reply in German."},
+    };
+    struct language_case { const char* message; bool english; };
+    const language_case cases[] = {
+        {"so hi explain me about yourself", true},
+        {"so are you able to start earlier", true},
+        {"Könnten Sie früher anfangen?", false},
+        {"so can you elaborate", true},
+        {"What does a mutex do? Please answer in German.", false},
+        {"Was macht ein Mutex? Bitte antworte auf Englisch.", true},
+    };
+    const auto language_scores = [](std::string answer) {
+        const std::vector<std::string> english = {
+            "the", "and", "i", "my", "am", "with", "can", "would", "to", "not",
+            "that", "it", "of", "have", "you", "is", "earliest", "a"};
+        const std::vector<std::string> german = {
+            "ich", "und", "der", "die", "das", "mit", "kann", "nicht", "ist",
+            "ein", "eine", "zu", "den", "dem", "mein", "meine", "sie", "es", "auch"};
+        answer = to_lower(std::move(answer));
+        for (auto& c : answer) if (!std::isalpha(static_cast<unsigned char>(c))) c = ' ';
+        std::istringstream words(answer);
+        int en = 0, de = 0;
+        for (std::string word; words >> word;) {
+            en += std::find(english.begin(), english.end(), word) != english.end();
+            de += std::find(german.begin(), german.end(), word) != german.end();
+        }
+        return std::pair{en, de};
+    };
+
+    for (const bool stream : {true, false}) {
+        json history = {
+            {{"role", "user"}, {"text", "Erzählen Sie etwas über sich."}},
+            {{"role", "assistant"}, {"text", "Ich bin Embedded-Softwareentwickler und arbeite mit C++ und Linux."}},
+            {{"role", "user"}, {"text", "Wann können Sie anfangen?"}},
+            {{"role", "assistant"}, {"text", "Im April, nach meinem Umzug nach Deutschland."}},
+        };
+        for (const auto& sample : cases) {
+            SCOPED_TRACE(std::string(stream ? "streaming: " : "blocking: ") + sample.message);
+            const json body = {
+                {"provider", "anthropic"}, {"model", "claude-sonnet-4-5-20250929"},
+                {"mode", "general"}, {"message", sample.message},
+                {"temperature", 0.7}, {"max_tokens", 192},
+                {"profile", profile}, {"history", history},
+            };
+            const auto response = http.post_json(base_url() + (stream ? "/api/chat/stream" : "/api/chat"),
+                                                 body.dump(), auth_headers());
+            ASSERT_EQ(response.status, 200);
+            std::string answer;
+            json result;
+            if (stream) {
+                std::istringstream lines(response.body);
+                for (std::string line; std::getline(lines, line);) {
+                    if (line.rfind("data:", 0) != 0) continue;
+                    const auto event = json::parse(line.substr(5));
+                    answer += event.value("delta", "");
+                    if (event.value("done", false)) result = event;
+                }
+            } else {
+                result = json::parse(response.body);
+                answer = result.value("content", "");
+            }
+            ASSERT_TRUE(result.value("success", false)) << result.value("error", "missing done event");
+            ASSERT_FALSE(answer.empty());
+            const auto [en, de] = language_scores(answer);
+            if (sample.english) EXPECT_GT(en, de) << answer;
+            else                EXPECT_GT(de, en) << answer;
+            history.push_back({{"role", "user"}, {"text", sample.message}});
+            history.push_back({{"role", "assistant"}, {"text", answer}});
+        }
+    }
+}
 
 // Helper: standard 'reply with exactly OK' probe against a given provider.
 // Returns the parsed JSON response body; success() asserts the HTTP and
